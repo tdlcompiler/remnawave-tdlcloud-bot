@@ -10,8 +10,10 @@ services:
       POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./data:/app/data
     networks:
       - bot_network
+      - remnawave-network
     healthcheck:
       test:
         [
@@ -32,6 +34,7 @@ services:
       - redis_data:/data
     networks:
       - bot_network
+      - remnawave-network
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 30s
@@ -41,6 +44,7 @@ services:
   bot:
     build: .
     container_name: remnawave_bot
+    hostname: tdlcloud-shop
     restart: unless-stopped
     depends_on:
       postgres:
@@ -80,6 +84,7 @@ services:
       - '${WEB_API_PORT:-8080}:8080'
     networks:
       - bot_network
+      - remnawave-network
     healthcheck:
       test:
         [
@@ -102,7 +107,10 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
-          gateway: 172.20.0.1
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1
     driver_opts:
       com.docker.network.driver.mtu: 1350
+  remnawave-network:
+    name: remnawave-network
+    external: true

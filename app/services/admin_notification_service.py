@@ -66,6 +66,18 @@ class AdminNotificationService:
             NotificationCategory.PARTNERS: getattr(settings, 'ADMIN_NOTIFICATIONS_PARTNERS_TOPIC_ID', None),
             NotificationCategory.TICKETS: self.ticket_topic_id,
         }
+        
+    def _get_profile_button(self, user_id: int | None) -> types.InlineKeyboardMarkup | None:
+        """Создаёт инлайн-кнопку для открытия профиля пользователя в Telegram."""
+        if user_id is None:
+            return None
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text="🔍 Открыть профиль",
+                url=f"tg://user?id={user_id}"
+            )]
+        ])
+        return keyboard    
 
     async def _get_referrer_info(self, db: AsyncSession, referred_by_id: int | None) -> str:
         if not referred_by_id:
@@ -403,7 +415,8 @@ class AdminNotificationService:
             message_lines.append('')
             message_lines.append(f'⏰ <i>{format_local_datetime(datetime.now(UTC), "%d.%m.%Y %H:%M:%S")}</i>')
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.TRIALS)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.TRIALS, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о триале', error=e)
@@ -542,7 +555,8 @@ class AdminNotificationService:
             else:
                 cat = NotificationCategory.PURCHASES
 
-            return await self._send_message('\n'.join(message_lines), category=cat)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=cat, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о покупке', error=e)
@@ -864,7 +878,8 @@ class AdminNotificationService:
                 return False
 
         try:
-            return await self._send_message(message, category=NotificationCategory.BALANCE)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message(message, category=NotificationCategory.BALANCE, reply_markup=profile_button)
         except Exception as e:
             logger.error('Ошибка отправки уведомления о пополнении', error=e, exc_info=True)
             return False
@@ -941,7 +956,8 @@ class AdminNotificationService:
 
 ⏰ <i>{format_local_datetime(datetime.now(UTC), '%d.%m.%Y %H:%M:%S')}</i>"""
 
-            return await self._send_message(message, category=NotificationCategory.RENEWALS)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message(message, category=NotificationCategory.RENEWALS, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о продлении', error=e)
@@ -1056,7 +1072,8 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления об активации промокода', error=e)
@@ -1145,7 +1162,8 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO)
+            profile_button = self._get_profile_button(telegram_user.id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о переходе по кампании', error=e)
@@ -1237,7 +1255,8 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PROMO, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о смене промогруппы', error=e)
@@ -1262,40 +1281,7 @@ class AdminNotificationService:
         *,
         category: NotificationCategory | None = None,
     ) -> bool:
-        if not self.chat_id:
-            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
-            return False
-
-        try:
-            message_kwargs = {
-                'chat_id': self.chat_id,
-                'text': text,
-                'parse_mode': 'HTML',
-                'disable_web_page_preview': True,
-            }
-
-            thread_id = self._resolve_topic_id(category)
-            if thread_id:
-                message_kwargs['message_thread_id'] = thread_id
-            if reply_markup is not None:
-                message_kwargs['reply_markup'] = reply_markup
-
-            await self.bot.send_message(**message_kwargs)
-            logger.info('Уведомление отправлено в чат', chat_id=self.chat_id, category=category)
-            return True
-
-        except TelegramForbiddenError:
-            logger.error('Бот не имеет прав для отправки в чат', chat_id=self.chat_id)
-            return False
-        except TelegramBadRequest as e:
-            logger.error('Ошибка отправки уведомления', error=e)
-            return False
-        except Exception as e:
-            logger.error('Неожиданная ошибка при отправке уведомления', error=e)
-            return False
-
-    def _is_enabled(self) -> bool:
-        return self.enabled and bool(self.chat_id)
+        return await self._send_text_with_retry(text, reply_markup, category)
 
     @property
     def is_enabled(self) -> bool:
@@ -1761,7 +1747,8 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.ADDONS)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.ADDONS, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления об изменении подписки', error=e)
@@ -1845,7 +1832,8 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PARTNERS)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PARTNERS, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о заявке на партнёрку', error=e)
@@ -1896,12 +1884,115 @@ class AdminNotificationService:
                 ]
             )
 
-            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PARTNERS)
+            profile_button = self._get_profile_button(user.telegram_id)
+            return await self._send_message('\n'.join(message_lines), category=NotificationCategory.PARTNERS, reply_markup=profile_button)
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о запросе на вывод', error=e)
             return False
+            
+    async def _send_text_with_retry(
+        self,
+        text: str,
+        reply_markup: types.InlineKeyboardMarkup | None = None,
+        category: NotificationCategory | None = None,
+    ) -> bool:
+        """Отправляет текстовое сообщение с повторной попыткой при ошибке приватности."""
+        if not self.chat_id:
+            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
+            return False
 
+        thread_id = self._resolve_topic_id(category)
+        message_kwargs = {
+            'chat_id': self.chat_id,
+            'text': text,
+            'parse_mode': 'HTML',
+            'disable_web_page_preview': True,
+        }
+        if thread_id:
+            message_kwargs['message_thread_id'] = thread_id
+
+        try:
+            # Попытка отправить с клавиатурой
+            if reply_markup:
+                message_kwargs['reply_markup'] = reply_markup
+            await self.bot.send_message(**message_kwargs)
+            logger.info('Уведомление отправлено в чат', chat_id=self.chat_id, category=category)
+            return True
+        except TelegramBadRequest as e:
+            if 'BUTTON_USER_PRIVACY_RESTRICTED' in str(e):
+                logger.warning(
+                    'Кнопка не поддерживается из-за приватности пользователя, отправляю без кнопки',
+                    category=category,
+                    error=e,
+                )
+                # Убираем клавиатуру и пробуем снова
+                if 'reply_markup' in message_kwargs:
+                    del message_kwargs['reply_markup']
+                try:
+                    await self.bot.send_message(**message_kwargs)
+                    return True
+                except Exception as e2:
+                    logger.error('Ошибка отправки уведомления без кнопки', error=e2)
+                    return False
+            else:
+                logger.error('Ошибка отправки уведомления', error=e)
+                return False
+        except Exception as e:
+            logger.error('Неожиданная ошибка при отправке уведомления', error=e)
+            return False
+
+    async def _send_photo_with_retry(
+        self,
+        photo: str,
+        caption: str | None = None,
+        reply_markup: types.InlineKeyboardMarkup | None = None,
+        category: NotificationCategory | None = None,
+    ) -> bool:
+        """Отправляет фото с повторной попыткой при ошибке приватности."""
+        if not self.chat_id:
+            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
+            return False
+
+        thread_id = self._resolve_topic_id(category)
+        photo_kwargs = {
+            'chat_id': self.chat_id,
+            'photo': photo,
+            'parse_mode': 'HTML',
+        }
+        if thread_id:
+            photo_kwargs['message_thread_id'] = thread_id
+        if caption:
+            photo_kwargs['caption'] = caption
+        if reply_markup:
+            photo_kwargs['reply_markup'] = reply_markup
+
+        try:
+            await self.bot.send_photo(**photo_kwargs)
+            return True
+        except TelegramBadRequest as e:
+            if 'BUTTON_USER_PRIVACY_RESTRICTED' in str(e):
+                logger.warning(
+                    'Кнопка не поддерживается из-за приватности пользователя, отправляю фото без кнопки',
+                    category=category,
+                    error=e,
+                )
+                # Убираем клавиатуру и пробуем снова
+                if 'reply_markup' in photo_kwargs:
+                    del photo_kwargs['reply_markup']
+                try:
+                    await self.bot.send_photo(**photo_kwargs)
+                    return True
+                except Exception as e2:
+                    logger.error('Ошибка отправки фото без кнопки', error=e2)
+                    return False
+            else:
+                logger.error('Ошибка отправки фото', error=e)
+                return False
+        except Exception as e:
+            logger.error('Неожиданная ошибка при отправке фото', error=e)
+            return False
+        
     async def send_bulk_ban_notification(
         self,
         admin_user_id: int,
@@ -1985,45 +2076,28 @@ class AdminNotificationService:
         photo_file_id: str,
         keyboard: types.InlineKeyboardMarkup | None = None,
     ) -> bool:
-        """Отправить фото с текстом в тикет-топик.
-        Если текст помещается в caption (≤1024 символов после парсинга HTML) — фото с caption.
-        Иначе — сначала текст, потом фото в тот же топик.
-        """
         if not self.chat_id:
             return False
 
         thread_id = self._resolve_topic_id(category=NotificationCategory.TICKETS)
 
-        try:
-            if not caption_exceeds_telegram_limit(text):
-                # Фото с caption — всё в одном сообщении
-                photo_kwargs: dict = {
-                    'chat_id': self.chat_id,
-                    'photo': photo_file_id,
-                    'caption': text,
-                    'parse_mode': 'HTML',
-                }
-                if thread_id:
-                    photo_kwargs['message_thread_id'] = thread_id
-                if keyboard:
-                    photo_kwargs['reply_markup'] = keyboard
-                await self.bot.send_photo(**photo_kwargs)
-            else:
-                # Текст отдельно, фото следом в тот же топик
-                await self._send_message(text, reply_markup=keyboard, category=NotificationCategory.TICKETS)
-                photo_kwargs = {
-                    'chat_id': self.chat_id,
-                    'photo': photo_file_id,
-                }
-                if thread_id:
-                    photo_kwargs['message_thread_id'] = thread_id
-                await self.bot.send_photo(**photo_kwargs)
+        # Если текст помещается в caption, отправляем фото с caption и клавиатурой
+        if not caption_exceeds_telegram_limit(text):
+            return await self._send_photo_with_retry(
+                photo_file_id,
+                caption=text,
+                reply_markup=keyboard,
+                category=NotificationCategory.TICKETS,
+            )
+        else:
+            # Текст отдельно (с клавиатурой или без), фото отдельно
+            text_sent = await self._send_text_with_retry(text, keyboard, category=NotificationCategory.TICKETS)
+            photo_sent = await self._send_photo_with_retry(photo_file_id, category=NotificationCategory.TICKETS)
+            return text_sent and photo_sent
 
-            return True
-        except Exception as e:
-            logger.error('Ошибка отправки фото-уведомления тикета', error=e)
-            # Fallback: отправляем хотя бы текст
-            return await self._send_message(text, reply_markup=keyboard, category=NotificationCategory.TICKETS)
+    def _is_enabled(self) -> bool:
+        """Проверяет, включены ли уведомления."""
+        return self.enabled and bool(self.chat_id)
 
     async def send_suspicious_traffic_notification(self, message: str, bot: Bot, topic_id: int | None = None) -> bool:
         """
