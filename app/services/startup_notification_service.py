@@ -235,40 +235,16 @@ class StartupNotificationService:
             timestamp = format_local_datetime(datetime.now(UTC), DATETIME_FORMAT)
 
             message = (
-                f'<b>Remnawave Bedolaga Bot</b>\n\n'
+                f'<b>TDL Cloud Bot</b>\n\n'
                 f'✅ Бот успешно запущен\n\n'
                 f'<blockquote expandable>{system_info}</blockquote>\n\n'
                 f'<i>{timestamp}</i>'
-            )
-
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text='Поставить звезду',
-                            url=GITHUB_BOT_URL,
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text='Вебкабинет',
-                            url=GITHUB_CABINET_URL,
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text='Сообщество',
-                            url=COMMUNITY_URL,
-                        ),
-                    ],
-                ]
             )
 
             message_kwargs: dict = {
                 'chat_id': self.chat_id,
                 'text': message,
                 'parse_mode': ParseMode.HTML,
-                'reply_markup': keyboard,
                 'disable_web_page_preview': True,
             }
 

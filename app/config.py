@@ -592,8 +592,8 @@ class Settings(BaseSettings):
     MEDIA_IMAGE_MAX_DIMENSION: int = 2048
     MEDIA_JPEG_QUALITY: int = 85
     MINIAPP_PURCHASE_URL: str = ''
-    MINIAPP_SERVICE_NAME_EN: str = 'Bedolaga VPN'
-    MINIAPP_SERVICE_NAME_RU: str = 'Bedolaga VPN'
+    MINIAPP_SERVICE_NAME_EN: str = 'TDL Cloud'
+    MINIAPP_SERVICE_NAME_RU: str = 'TDL Cloud'
     MINIAPP_SERVICE_DESCRIPTION_EN: str = 'Secure & Fast Connection'
     MINIAPP_SERVICE_DESCRIPTION_RU: str = 'Безопасное и быстрое подключение'
     CONNECT_BUTTON_HAPP_DOWNLOAD_ENABLED: bool = False
