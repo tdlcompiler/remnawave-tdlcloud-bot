@@ -98,9 +98,11 @@ services:
 
 volumes:
   postgres_data:
-    driver: local
+    external: true
+    name: remnawave-bedolaga-telegram-bot_postgres_data
   redis_data:
-    driver: local
+    external: true
+    name: remnawave-bedolaga-telegram-bot_redis_data
 
 networks:
   bot_network:

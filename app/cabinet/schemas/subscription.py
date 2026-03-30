@@ -145,7 +145,7 @@ class PurchaseSelectionRequest(BaseModel):
     period_days: int | None = Field(None, ge=1, le=3650, description='Period in days')
     traffic_value: int | None = Field(None, ge=0, le=100_000, description='Traffic in GB (0 = unlimited)')
     servers: list[str] | None = Field(default_factory=list, description='Server UUIDs')
-    devices: int | None = Field(None, ge=1, le=100, description='Device limit')
+    devices: int | None = Field(None, ge=0, le=100, description='Device limit (0 = unlimited)')
 
 
 class PurchasePreviewRequest(BaseModel):

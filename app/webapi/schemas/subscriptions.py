@@ -30,7 +30,7 @@ class SubscriptionCreateRequest(BaseModel):
     is_trial: bool = False
     duration_days: int | None = Field(None, ge=1, le=36500)
     traffic_limit_gb: int | None = Field(None, ge=0, le=1_000_000)
-    device_limit: int | None = Field(None, ge=1, le=10_000)
+    device_limit: int | None = Field(None, ge=0, le=10_000)
     squad_uuid: str | None = None
     connected_squads: list[str] | None = None
     replace_existing: bool = False

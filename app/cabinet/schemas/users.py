@@ -315,7 +315,7 @@ class UpdateSubscriptionRequest(BaseModel):
 
     # For create new subscription
     is_trial: bool | None = Field(None, description='Is trial subscription')
-    device_limit: int | None = Field(None, ge=1, description='Device limit')
+    device_limit: int | None = Field(None, ge=0, description='Device limit')
 
 
 class UpdateSubscriptionResponse(BaseModel):

@@ -204,7 +204,7 @@ async def create_tariff(
         display_order=max(0, display_order),
         is_active=is_active,
         traffic_limit_gb=max(0, traffic_limit_gb),
-        device_limit=max(1, device_limit),
+        device_limit=max(0, device_limit),
         device_price_kopeks=device_price_kopeks,
         max_device_limit=max_device_limit,
         allowed_squads=allowed_squads or [],
@@ -316,7 +316,7 @@ async def update_tariff(
     if traffic_limit_gb is not None:
         tariff.traffic_limit_gb = max(0, traffic_limit_gb)
     if device_limit is not None:
-        tariff.device_limit = max(1, device_limit)
+        tariff.device_limit = max(0, device_limit)
     if device_price_kopeks is not ...:
         # Если передан device_price_kopeks (включая None) - обновляем
         tariff.device_price_kopeks = device_price_kopeks
