@@ -1044,7 +1044,11 @@ def get_admin_remnawave_keyboard(language: str = 'ru') -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=_t(texts, 'ADMIN_REMNAWAVE_TRAFFIC', '📈 Трафик'), callback_data='admin_rw_traffic'
-                )
+                ),
+                InlineKeyboardButton(
+                    text=_t(texts, 'ADMIN_REMNAWAVE_HWID_CONFLICTS', '🧬 Конфликты HWID'),
+                    callback_data='admin_rw_hwid_conflicts',
+                ),
             ],
             [InlineKeyboardButton(text=texts.BACK, callback_data='admin_submenu_settings')],
         ]
