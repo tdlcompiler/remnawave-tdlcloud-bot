@@ -990,13 +990,14 @@ async def _render_user_subscription_overview(
                 ]
             )
         else:
-            keyboard.append(
-                [
-                    types.InlineKeyboardButton(
-                        text='✅ Активировать', callback_data=f'admin_sub_activate_{user_id}{_sid}'
-                    )
-                ]
-            )
+            row = [
+                types.InlineKeyboardButton(text='✅ Активировать', callback_data=f'admin_sub_activate_{user_id}{_sid}'),
+            ]
+            if settings.is_multi_tariff_enabled() and subscription_id:
+                row.append(
+                    types.InlineKeyboardButton(text='🗑 Удалить', callback_data=f'admin_sub_delete_{user_id}{_sid}')
+                )
+            keyboard.append(row)
     else:
         text += '❌ <b>Подписка отсутствует</b>\n\n'
         text += 'Пользователь еще не активировал подписку.'
@@ -3304,6 +3305,76 @@ async def confirm_subscription_deactivation(callback: types.CallbackQuery, db_us
 
 @admin_required
 @error_handler
+async def delete_user_subscription(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    """Show confirmation for deleting a subscription (multi-tariff only)."""
+    user_id, subscription_id = _extract_admin_sub_context(callback.data)
+
+    if not subscription_id or not settings.is_multi_tariff_enabled():
+        await callback.answer('Удаление доступно только в мультитарифном режиме', show_alert=True)
+        return
+
+    back_cb = f'admin_user_sub_select_{user_id}_{subscription_id}'
+    _sid = f'_s{subscription_id}'
+
+    await callback.message.edit_text(
+        '🗑 <b>Удаление подписки</b>\n\n⚠️ Подписка будет полностью удалена из системы.\nЭто действие необратимо!',
+        reply_markup=get_confirmation_keyboard(f'admin_sub_delete_confirm_{user_id}{_sid}', back_cb, db_user.language),
+    )
+    await callback.answer()
+
+
+@admin_required
+@error_handler
+async def confirm_subscription_deletion(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    """Delete a subscription permanently (multi-tariff only)."""
+    user_id, subscription_id = _extract_admin_sub_context(callback.data)
+
+    if not subscription_id or not settings.is_multi_tariff_enabled():
+        await callback.answer('Удаление доступно только в мультитарифном режиме', show_alert=True)
+        return
+
+    from app.database.crud.subscription import get_subscription_by_id_for_user
+
+    subscription = await get_subscription_by_id_for_user(db, subscription_id, user_id)
+    if not subscription:
+        await callback.answer('Подписка не найдена', show_alert=True)
+        return
+
+    # Disable on Remnawave side first
+    _uuid = getattr(subscription, 'remnawave_uuid', None)
+    if _uuid:
+        subscription_service = SubscriptionService()
+        await subscription_service.disable_remnawave_user(_uuid)
+
+    # Delete traffic purchases
+    from sqlalchemy import delete as sql_delete
+
+    from app.database.models import TrafficPurchase
+
+    await db.execute(sql_delete(TrafficPurchase).where(TrafficPurchase.subscription_id == subscription.id))
+
+    await db.delete(subscription)
+    await db.commit()
+
+    logger.info(
+        'Админ удалил подписку пользователя',
+        admin_id=db_user.id,
+        user_id=user_id,
+        subscription_id=subscription_id,
+    )
+
+    back_cb = f'admin_user_subscription_{user_id}'
+    await callback.message.edit_text(
+        '✅ Подписка удалена',
+        reply_markup=types.InlineKeyboardMarkup(
+            inline_keyboard=[[types.InlineKeyboardButton(text='📱 К подпискам', callback_data=back_cb)]]
+        ),
+    )
+    await callback.answer()
+
+
+@admin_required
+@error_handler
 async def activate_user_subscription(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
     user_id, subscription_id = _extract_admin_sub_context(callback.data)
 
@@ -4162,14 +4233,16 @@ async def _update_user_traffic(
         ) or getattr(user, 'remnawave_uuid', None)
         if _uuid:
             try:
-                from app.external.remnawave_api import TrafficLimitStrategy
+                from app.services.subscription_service import get_traffic_reset_strategy
 
                 remnawave_service = RemnaWaveService()
                 async with remnawave_service.get_api_client() as api:
                     await api.update_user(
                         uuid=_uuid,
                         traffic_limit_bytes=traffic_gb * (1024**3) if traffic_gb > 0 else 0,
-                        traffic_limit_strategy=TrafficLimitStrategy.MONTH,
+                        traffic_limit_strategy=get_traffic_reset_strategy(
+                            subscription.tariff if subscription else None
+                        ),
                         description=settings.format_remnawave_user_description(
                             full_name=user.full_name, username=user.username, telegram_id=user.telegram_id
                         ),
@@ -4877,8 +4950,9 @@ async def admin_buy_subscription_execute(callback: types.CallbackQuery, db_user:
             )
 
             try:
-                from app.external.remnawave_api import TrafficLimitStrategy, UserStatus
+                from app.external.remnawave_api import UserStatus
                 from app.services.remnawave_service import RemnaWaveService
+                from app.services.subscription_service import get_traffic_reset_strategy
 
                 remnawave_service = RemnaWaveService()
 
@@ -4903,7 +4977,7 @@ async def admin_buy_subscription_execute(callback: types.CallbackQuery, db_user:
                             traffic_limit_bytes=subscription.traffic_limit_gb * (1024**3)
                             if subscription.traffic_limit_gb > 0
                             else 0,
-                            traffic_limit_strategy=TrafficLimitStrategy.MONTH,
+                            traffic_limit_strategy=get_traffic_reset_strategy(subscription.tariff),
                             description=settings.format_remnawave_user_description(
                                 full_name=target_user.full_name,
                                 username=target_user.username,
@@ -4939,7 +5013,7 @@ async def admin_buy_subscription_execute(callback: types.CallbackQuery, db_user:
                             traffic_limit_bytes=subscription.traffic_limit_gb * (1024**3)
                             if subscription.traffic_limit_gb > 0
                             else 0,
-                            traffic_limit_strategy=TrafficLimitStrategy.MONTH,
+                            traffic_limit_strategy=get_traffic_reset_strategy(subscription.tariff),
                             telegram_id=target_user.telegram_id,
                             email=target_user.email,
                             description=settings.format_remnawave_user_description(
@@ -5938,6 +6012,11 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(confirm_subscription_deactivation, F.data.startswith('admin_sub_deactivate_confirm_'))
 
     dp.callback_query.register(activate_user_subscription, F.data.startswith('admin_sub_activate_'))
+
+    dp.callback_query.register(
+        delete_user_subscription, F.data.startswith('admin_sub_delete_') & ~F.data.contains('confirm')
+    )
+    dp.callback_query.register(confirm_subscription_deletion, F.data.startswith('admin_sub_delete_confirm_'))
 
     dp.callback_query.register(grant_trial_subscription, F.data.startswith('admin_sub_grant_trial_'))
 

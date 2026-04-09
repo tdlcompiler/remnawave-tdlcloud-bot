@@ -1,5 +1,37 @@
 # Changelog
 
+## [3.45.2](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/compare/v3.45.1...v3.45.2) (2026-04-08)
+
+
+### Bug Fixes
+
+* batch bug fixes from user complaints ([31adcfd](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/31adcfded4b161bf515d4d6b25b4395e543208f4))
+* batch bug fixes from user complaints ([78f963b](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/78f963bf5e7b3439d7614584c4041f88be5beb4a))
+* исправление парсинга черного списка (поддержка '#' и извлечение username) ([357d94d](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/357d94d1b0d7fc8036b00cbb6b75175c29821751))
+* исправление парсинга черного списка (поддержка '#' и извлечение username) ([2f71846](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/2f7184627a0fb598a8c0208905cdecf0e4bb04a7))
+
+## [3.45.1](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/compare/v3.45.0...v3.45.1) (2026-04-03)
+
+
+### Bug Fixes
+
+* add missing WEBHOOK_TORRENT_DETECTED mapping + dedup before uniq… ([4165eae](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/4165eaea7adfdaf683b1ece16c8c93a9c4ed216d))
+* add missing WEBHOOK_TORRENT_DETECTED mapping + dedup before unique index in migration 0053 ([3b5d5a1](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/3b5d5a18a1122ef50868fd038a09109d17795a74))
+
+## [3.45.0](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/compare/v3.44.0...v3.45.0) (2026-04-03)
+
+
+### New Features
+
+* send torrent blocker notification to user (not just admin) ([2f9d003](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/2f9d00343bee2980cc89bd24361259073b97127a))
+
+
+### Bug Fixes
+
+* resolve multiple subscription bugs — LIMITED status, trial tariff blocking, traffic reset strategy, classic mode pricing, 100% discount support ([9b7ac47](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/9b7ac47f16076e546da62062ff7ce18d7c308988))
+* restore missing import + rewrite user.deleted webhook to properly deactivate all subscriptions ([819f09a](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/819f09a68ec95237294bae97f31c644044a3623f))
+* subscription system bugfixes + torrent notifications + user deletion cleanup ([7d24e8d](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/commit/7d24e8d7047c7a3a1c417e655a6fbccbe5ae577d))
+
 ## [3.44.0](https://github.com/BEDOLAGA-DEV/remnawave-bedolaga-telegram-bot/compare/v3.43.1...v3.44.0) (2026-04-02)
 
 
