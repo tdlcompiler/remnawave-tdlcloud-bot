@@ -1211,6 +1211,8 @@ class User(Base):
     password_reset_token = Column(String(255), nullable=True)
     password_reset_expires = Column(AwareDateTime(), nullable=True)
     cabinet_last_login = Column(AwareDateTime(), nullable=True)
+    # Campaign slug saved at registration, consumed at email verification
+    pending_campaign_slug = Column(String(64), nullable=True)
     # Email change fields
     email_change_new = Column(String(255), nullable=True)  # New email pending verification
     email_change_code = Column(String(6), nullable=True)  # 6-digit verification code
@@ -1262,7 +1264,7 @@ class User(Base):
     user_promo_groups = relationship('UserPromoGroup', back_populates='user', cascade='all, delete-orphan')
     poll_responses = relationship('PollResponse', back_populates='user')
     admin_roles_rel = relationship('UserRole', foreign_keys='[UserRole.user_id]', back_populates='user')
-    notification_settings = Column(JSON, nullable=True, default=dict)
+    notification_settings = Column(JSONB, nullable=True, default=dict)
     last_pinned_message_id = Column(Integer, nullable=True)
 
     # Ограничения пользователя
@@ -2244,6 +2246,9 @@ class BroadcastHistory(Base):
     admin_name = Column(String(255))
     created_at = Column(AwareDateTime(), server_default=func.now())
     completed_at = Column(AwareDateTime(), nullable=True)
+
+    # Broadcast category for user notification preferences filtering
+    category = Column(String(20), default='system', nullable=False)  # system|news|promo
 
     # Email broadcast fields
     channel = Column(String(20), default='telegram', nullable=False)  # telegram|email|both
