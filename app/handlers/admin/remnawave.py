@@ -1,3 +1,4 @@
+import asyncio
 import html
 import math
 from datetime import UTC, datetime, timedelta
@@ -5,6 +6,7 @@ from typing import Any
 
 import structlog
 from aiogram import Dispatcher, F, types
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +24,11 @@ from app.keyboards.admin import (
     get_squad_management_keyboard,
 )
 from app.localization.texts import get_texts
+from app.services.hwid_conflict_service import (
+    HwidConflictAccount,
+    HwidConflictScanResult,
+    HwidConflictService,
+)
 from app.services.remnawave_service import RemnaWaveConfigurationError, RemnaWaveService
 from app.services.remnawave_sync_service import (
     RemnaWaveAutoSyncStatus,
@@ -44,6 +51,9 @@ squad_inbound_selections = {}
 squad_create_data = {}
 
 MIGRATION_PAGE_SIZE = 8
+HWID_CONFLICTS_PREVIEW_LIMIT = 10
+HWID_CONFLICT_USERS_PREVIEW_LIMIT = 4
+HWID_NOTIFY_HWIDS_PREVIEW_LIMIT = 5
 
 
 def _format_duration(seconds: float) -> str:
@@ -80,6 +90,142 @@ def _format_server_stats(stats: dict[str, Any] | None) -> str:
     total = stats.get('total', 0)
 
     return f'• Создано: {created}\n• Обновлено: {updated}\n• Удалено: {removed}\n• Всего в панели: {total}'
+
+
+def _short_hwid(hwid: str) -> str:
+    normalized = (hwid or '').strip()
+    if len(normalized) <= 18:
+        return normalized
+    return f'{normalized[:8]}…{normalized[-6:]}'
+
+
+def _format_subscription_status(status: str | None) -> str:
+    return {
+        'active': 'активна',
+        'trial': 'триал',
+        'limited': 'лимит',
+        'disabled': 'отключена',
+        'expired': 'истекла',
+    }.get((status or '').lower(), status or 'неизвестно')
+
+
+def _format_conflict_account_summary(account: HwidConflictAccount) -> str:
+    summary = account.user_label or 'Неизвестный аккаунт'
+    details = []
+
+    if account.subscription_id:
+        details.append(f'подписка #{account.subscription_id}')
+    if account.tariff_name:
+        details.append(f'тариф {account.tariff_name}')
+    if account.subscription_status:
+        details.append(f'статус {_format_subscription_status(account.subscription_status)}')
+
+    if details:
+        return f'{summary} ({", ".join(details)})'
+    return summary
+
+
+def _build_hwid_conflicts_text(report: HwidConflictScanResult) -> str:
+    lines = [
+        '🧬 <b>Проверка конфликтов HWID</b>',
+        '',
+        f'📱 Проверено устройств: <b>{report.scanned_devices}</b>',
+        f'⚠️ Конфликтных HWID: <b>{report.duplicate_hwids}</b>',
+        f'👥 Затронуто panel UUID: <b>{report.unique_panel_users_in_conflicts}</b>',
+        f'📨 Telegram-аккаунтов для уведомления: <b>{report.telegram_targets_count}</b>',
+    ]
+
+    if report.unmatched_panel_users:
+        lines.append(f'❓ Не сопоставлено с БД бота: <b>{report.unmatched_panel_users}</b>')
+
+    if not report.has_conflicts:
+        lines.extend(
+            [
+                '',
+                '✅ Конфликтов не найдено.',
+            ]
+        )
+        return '\n'.join(lines)
+
+    lines.extend(
+        [
+            '',
+            '<b>Примеры конфликтов:</b>',
+        ]
+    )
+
+    for index, conflict in enumerate(report.conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT], start=1):
+        lines.append(f'{index}. <code>{html.escape(_short_hwid(conflict.hwid))}</code> — {len(conflict.accounts)} аккаунта(ов)')
+
+        for account in conflict.accounts[:HWID_CONFLICT_USERS_PREVIEW_LIMIT]:
+            account_summary = _format_conflict_account_summary(account)
+            lines.append(f'   • {html.escape(account_summary)}')
+
+        hidden_accounts = len(conflict.accounts) - HWID_CONFLICT_USERS_PREVIEW_LIMIT
+        if hidden_accounts > 0:
+            lines.append(f'   • … и еще {hidden_accounts}')
+
+    hidden_conflicts = len(report.conflicts) - HWID_CONFLICTS_PREVIEW_LIMIT
+    if hidden_conflicts > 0:
+        lines.extend(
+            [
+                '',
+                f'… и еще <b>{hidden_conflicts}</b> конфликтов.',
+            ]
+        )
+
+    return '\n'.join(lines)
+
+
+def _build_hwid_conflicts_keyboard(report: HwidConflictScanResult) -> types.InlineKeyboardMarkup:
+    rows: list[list[types.InlineKeyboardButton]] = []
+
+    if report.telegram_targets_count > 0:
+        rows.append(
+            [
+                types.InlineKeyboardButton(
+                    text=f'📨 Разослать предупреждение ({report.telegram_targets_count})',
+                    callback_data='admin_rw_hwid_conflicts_notify',
+                )
+            ]
+        )
+
+    rows.extend(
+        [
+            [types.InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_rw_hwid_conflicts')],
+            [types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')],
+        ]
+    )
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_hwid_warning_message(hwids: set[str]) -> str:
+    sorted_hwids = sorted(hwids)
+    preview_hwids = sorted_hwids[:HWID_NOTIFY_HWIDS_PREVIEW_LIMIT]
+    preview_line = ', '.join(f'<code>{html.escape(_short_hwid(hwid))}</code>' for hwid in preview_hwids)
+    hidden_hwids = len(sorted_hwids) - len(preview_hwids)
+
+    lines = [
+        '⚠️ <b>Важное уведомление по Вашим подпискам</b>',
+        '',
+        'Мы обнаружили, что одно и то же устройство используется сразу в нескольких подписках.',
+        'Пожалуйста, удалите с устройства лишнюю подписку и оставьте только одну активную.',
+        '',
+        f'🧬 Конфликтных устройств: <b>{len(sorted_hwids)}</b>',
+    ]
+
+    if preview_line:
+        lines.append(f'ID устройств: {preview_line}')
+    if hidden_hwids > 0:
+        lines.append(f'… и еще {hidden_hwids}')
+
+    lines.extend(
+        [
+            '',
+            'Если нужна помощь, напишите в поддержку через меню бота (@tdlcloud).',
+        ]
+    )
+    return '\n'.join(lines)
 
 
 def _build_auto_sync_view(status: RemnaWaveAutoSyncStatus) -> tuple[str, types.InlineKeyboardMarkup]:
@@ -935,6 +1081,155 @@ async def show_remnawave_menu(callback: types.CallbackQuery, db_user: User, db: 
 
     await callback.message.edit_text(text, reply_markup=get_admin_remnawave_keyboard(db_user.language))
     await callback.answer()
+
+
+@admin_required
+@error_handler
+async def show_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    await callback.message.edit_text('🧬 Проверяю HWID в подписках...\n\nПожалуйста, подождите.', reply_markup=None)
+
+    conflict_service = HwidConflictService()
+
+    try:
+        report = await conflict_service.scan_conflicts(db)
+    except RemnaWaveConfigurationError as config_error:
+        await callback.message.edit_text(
+            f'❌ RemnaWave не настроен: {config_error}',
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
+            ),
+        )
+        await callback.answer()
+        return
+    except Exception as error:
+        logger.error('Ошибка проверки HWID конфликтов', error=error)
+        await callback.message.edit_text(
+            '❌ Не удалось выполнить проверку HWID. Проверьте логи и попробуйте снова.',
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
+            ),
+        )
+        await callback.answer()
+        return
+
+    await callback.message.edit_text(
+        _build_hwid_conflicts_text(report),
+        reply_markup=_build_hwid_conflicts_keyboard(report),
+        parse_mode='HTML',
+    )
+    await callback.answer()
+
+
+@admin_required
+@error_handler
+async def notify_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    await callback.message.edit_text(
+        '📨 Запускаю рассылку предупреждений по конфликтам HWID...\n\nПожалуйста, подождите.',
+        reply_markup=None,
+    )
+
+    conflict_service = HwidConflictService()
+
+    try:
+        report = await conflict_service.scan_conflicts(db)
+    except RemnaWaveConfigurationError as config_error:
+        await callback.message.edit_text(
+            f'❌ RemnaWave не настроен: {config_error}',
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
+            ),
+        )
+        await callback.answer()
+        return
+    except Exception as error:
+        logger.error('Ошибка подготовки рассылки по HWID конфликтам', error=error)
+        await callback.message.edit_text(
+            '❌ Не удалось выполнить рассылку. Проверьте логи и попробуйте снова.',
+            reply_markup=types.InlineKeyboardMarkup(
+                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
+            ),
+        )
+        await callback.answer()
+        return
+
+    if report.telegram_targets_count == 0:
+        no_targets_text = _build_hwid_conflicts_text(report) + '\n\nℹ️ Нет аккаунтов для рассылки уведомлений.'
+        await callback.message.edit_text(
+            no_targets_text,
+            reply_markup=_build_hwid_conflicts_keyboard(report),
+            parse_mode='HTML',
+        )
+        await callback.answer('Нет получателей')
+        return
+
+    total = report.telegram_targets_count
+    sent = 0
+    blocked = 0
+    failed = 0
+
+    for telegram_id, hwids in sorted(report.telegram_targets.items()):
+        message_text = _build_hwid_warning_message(hwids)
+
+        try:
+            await callback.bot.send_message(
+                telegram_id,
+                message_text,
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+            )
+            sent += 1
+        except TelegramRetryAfter as retry_error:
+            await asyncio.sleep(float(retry_error.retry_after))
+            try:
+                await callback.bot.send_message(
+                    telegram_id,
+                    message_text,
+                    parse_mode='HTML',
+                    disable_web_page_preview=True,
+                )
+                sent += 1
+            except TelegramForbiddenError:
+                blocked += 1
+            except TelegramBadRequest:
+                failed += 1
+            except Exception as send_error:
+                logger.warning(
+                    'Ошибка повторной отправки предупреждения о HWID конфликте',
+                    telegram_id=telegram_id,
+                    error=send_error,
+                )
+                failed += 1
+        except TelegramForbiddenError:
+            blocked += 1
+        except TelegramBadRequest:
+            failed += 1
+        except Exception as send_error:
+            logger.warning(
+                'Ошибка отправки предупреждения о HWID конфликте',
+                telegram_id=telegram_id,
+                error=send_error,
+            )
+            failed += 1
+
+        await asyncio.sleep(0.05)
+
+    result_lines = [
+        '📨 <b>Рассылка по конфликтам HWID завершена</b>',
+        '',
+        f'👥 Получателей: <b>{total}</b>',
+        f'✅ Отправлено: <b>{sent}</b>',
+        f'🚫 Бот заблокирован: <b>{blocked}</b>',
+        f'❌ Ошибок: <b>{failed}</b>',
+        '',
+        f'⚠️ Текущих конфликтных HWID: <b>{report.duplicate_hwids}</b>',
+    ]
+
+    await callback.message.edit_text(
+        '\n'.join(result_lines),
+        reply_markup=_build_hwid_conflicts_keyboard(report),
+        parse_mode='HTML',
+    )
+    await callback.answer('Рассылка завершена')
 
 
 @admin_required
@@ -2987,6 +3282,8 @@ async def show_squads_management(callback: types.CallbackQuery, db_user: User, d
 
 def register_handlers(dp: Dispatcher):
     dp.callback_query.register(show_remnawave_menu, F.data == 'admin_remnawave')
+    dp.callback_query.register(show_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts')
+    dp.callback_query.register(notify_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts_notify')
     dp.callback_query.register(show_system_stats, F.data == 'admin_rw_system')
     dp.callback_query.register(show_traffic_stats, F.data == 'admin_rw_traffic')
     dp.callback_query.register(show_nodes_management, F.data == 'admin_rw_nodes')
