@@ -149,6 +149,27 @@ async def route_payment_by_method(
             await process_severpay_payment_amount(message, db_user, db, amount_kopeks, state)
         return True
 
+    if payment_method == 'paypear':
+        from .paypear import process_paypear_payment_amount
+
+        async with AsyncSessionLocal() as db:
+            await process_paypear_payment_amount(message, db_user, db, amount_kopeks, state)
+        return True
+
+    if payment_method == 'rollypay':
+        from .rollypay import process_rollypay_payment_amount
+
+        async with AsyncSessionLocal() as db:
+            await process_rollypay_payment_amount(message, db_user, db, amount_kopeks, state)
+        return True
+
+    if payment_method == 'aurapay':
+        from .aurapay import process_aurapay_payment_amount
+
+        async with AsyncSessionLocal() as db:
+            await process_aurapay_payment_amount(message, db_user, db, amount_kopeks, state)
+        return True
+
     if payment_method == 'riopay':
         from .riopay import process_riopay_payment_amount
 
@@ -470,12 +491,16 @@ async def process_topup_amount(message: types.Message, db_user: User, state: FSM
         amount_rubles = float(amount_text.replace(',', '.'))
 
         if amount_rubles < 1:
-            await message.answer('Минимальная сумма пополнения: 1 ₽', reply_markup=get_back_keyboard(db_user.language))
+            await message.answer(
+                'Минимальная сумма пополнения: 1 ₽',
+                reply_markup=get_back_keyboard(db_user.language, callback_data='balance_topup'),
+            )
             return
 
         if amount_rubles > 50000:
             await message.answer(
-                'Максимальная сумма пополнения: 50,000 ₽', reply_markup=get_back_keyboard(db_user.language)
+                'Максимальная сумма пополнения: 50,000 ₽',
+                reply_markup=get_back_keyboard(db_user.language, callback_data='balance_topup'),
             )
             return
 
@@ -488,7 +513,7 @@ async def process_topup_amount(message: types.Message, db_user: User, state: FSM
                 min_rubles = settings.YOOKASSA_MIN_AMOUNT_KOPEKS / 100
                 await message.answer(
                     f'❌ Минимальная сумма для оплаты через YooKassa: {min_rubles:.0f} ₽',
-                    reply_markup=get_back_keyboard(db_user.language),
+                    reply_markup=get_back_keyboard(db_user.language, callback_data='balance_topup'),
                 )
                 return
 
@@ -496,7 +521,7 @@ async def process_topup_amount(message: types.Message, db_user: User, state: FSM
                 max_rubles = settings.YOOKASSA_MAX_AMOUNT_KOPEKS / 100
                 await message.answer(
                     f'❌ Максимальная сумма для оплаты через YooKassa: {max_rubles:,.0f} ₽'.replace(',', ' '),
-                    reply_markup=get_back_keyboard(db_user.language),
+                    reply_markup=get_back_keyboard(db_user.language, callback_data='balance_topup'),
                 )
                 return
 
@@ -572,6 +597,7 @@ async def handle_topup_amount_callback(
 
             platega_method_code = int(method[len('platega_m') :])
             await state.update_data(payment_method='platega', platega_method=platega_method_code)
+            await state.set_state(BalanceStates.waiting_for_amount)
             async with AsyncSessionLocal() as db:
                 await process_platega_payment_amount(callback.message, db_user, db, amount_kopeks, state)
         elif method == 'platega':
@@ -583,6 +609,7 @@ async def handle_topup_amount_callback(
             method_code = int(data.get('platega_method', 0)) if data else 0
 
             if method_code > 0:
+                await state.set_state(BalanceStates.waiting_for_amount)
                 async with AsyncSessionLocal() as db:
                     await process_platega_payment_amount(callback.message, db_user, db, amount_kopeks, state)
             else:
@@ -594,9 +621,12 @@ async def handle_topup_amount_callback(
             await start_tribute_payment(callback, db_user)
             return
         # Стандартные методы через роутер
-        elif not await route_payment_by_method(callback.message, db_user, amount_kopeks, state, method):
-            await callback.answer('❌ Неизвестный способ оплаты', show_alert=True)
-            return
+        else:
+            await state.update_data(payment_method=method)
+            await state.set_state(BalanceStates.waiting_for_amount)
+            if not await route_payment_by_method(callback.message, db_user, amount_kopeks, state, method):
+                await callback.answer('❌ Неизвестный способ оплаты', show_alert=True)
+                return
 
         await callback.answer()
 
@@ -718,6 +748,18 @@ def register_balance_handlers(dp: Dispatcher):
     from .severpay import start_severpay_topup
 
     dp.callback_query.register(start_severpay_topup, F.data == 'topup_severpay')
+
+    from .paypear import start_paypear_topup
+
+    dp.callback_query.register(start_paypear_topup, F.data == 'topup_paypear')
+
+    from .rollypay import start_rollypay_topup
+
+    dp.callback_query.register(start_rollypay_topup, F.data == 'topup_rollypay')
+
+    from .aurapay import start_aurapay_topup
+
+    dp.callback_query.register(start_aurapay_topup, F.data == 'topup_aurapay')
 
     from .mulenpay import check_mulenpay_payment_status
 
