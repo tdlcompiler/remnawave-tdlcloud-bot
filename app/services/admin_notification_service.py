@@ -79,6 +79,12 @@ class AdminNotificationService:
         ])
         return keyboard    
 
+        # Per-category enabled flags (default True — backwards compatible)
+        self.category_enabled: dict[NotificationCategory, bool] = {}
+        for cat in NotificationCategory:
+            key = f'ADMIN_NOTIFICATIONS_{cat.value.upper()}_ENABLED'
+            self.category_enabled[cat] = getattr(settings, key, True)
+
     async def _get_referrer_info(self, db: AsyncSession, referred_by_id: int | None) -> str:
         if not referred_by_id:
             return 'Нет'
@@ -1281,7 +1287,45 @@ class AdminNotificationService:
         *,
         category: NotificationCategory | None = None,
     ) -> bool:
-        return await self._send_text_with_retry(text, reply_markup, category)
+        if not self.chat_id:
+            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
+            return False
+
+        # Per-category suppression
+        if category and not self.category_enabled.get(category, True):
+            logger.debug('Уведомление подавлено (категория отключена)', category=category.value)
+            return False
+
+        try:
+            message_kwargs = {
+                'chat_id': self.chat_id,
+                'text': text,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True,
+            }
+
+            thread_id = self._resolve_topic_id(category)
+            if thread_id:
+                message_kwargs['message_thread_id'] = thread_id
+            if reply_markup is not None:
+                message_kwargs['reply_markup'] = reply_markup
+
+            await self.bot.send_message(**message_kwargs)
+            logger.info('Уведомление отправлено в чат', chat_id=self.chat_id, category=category)
+            return True
+
+        except TelegramForbiddenError:
+            logger.error('Бот не имеет прав для отправки в чат', chat_id=self.chat_id)
+            return False
+        except TelegramBadRequest as e:
+            logger.error('Ошибка отправки уведомления', error=e)
+            return False
+        except Exception as e:
+            logger.error('Неожиданная ошибка при отправке уведомления', error=e)
+            return False
+
+    def _is_enabled(self) -> bool:
+        return self.enabled and bool(self.chat_id)
 
     @property
     def is_enabled(self) -> bool:
