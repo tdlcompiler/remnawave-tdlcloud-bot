@@ -67,6 +67,12 @@ class AdminNotificationService:
             NotificationCategory.TICKETS: self.ticket_topic_id,
         }
         
+        # Per-category enabled flags (default True — backwards compatible)
+        self.category_enabled: dict[NotificationCategory, bool] = {}
+        for cat in NotificationCategory:
+            key = f'ADMIN_NOTIFICATIONS_{cat.value.upper()}_ENABLED'
+            self.category_enabled[cat] = getattr(settings, key, True)
+        
     def _get_profile_button(self, user_id: int | None) -> types.InlineKeyboardMarkup | None:
         """Создаёт инлайн-кнопку для открытия профиля пользователя в Telegram."""
         if user_id is None:
@@ -77,13 +83,7 @@ class AdminNotificationService:
                 url=f"tg://user?id={user_id}"
             )]
         ])
-        return keyboard    
-
-        # Per-category enabled flags (default True — backwards compatible)
-        self.category_enabled: dict[NotificationCategory, bool] = {}
-        for cat in NotificationCategory:
-            key = f'ADMIN_NOTIFICATIONS_{cat.value.upper()}_ENABLED'
-            self.category_enabled[cat] = getattr(settings, key, True)
+        return keyboard
 
     async def _get_referrer_info(self, db: AsyncSession, referred_by_id: int | None) -> str:
         if not referred_by_id:
