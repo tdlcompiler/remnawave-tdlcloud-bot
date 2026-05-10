@@ -2829,7 +2829,7 @@ async def process_webauth_confirm(
     texts = get_texts(user.language)
     if linked:
         await callback.message.edit_text(
-            texts.t('WEB_AUTH_SUCCESS', '✅ Авторизация в кабинете подтверждена! Вернитесь в браузер.'),
+            texts.t('WEB_AUTH_SUCCESS', '✅ Авторизация в кабинете подтверждена! Вернитесь в браузер или клиент TDL Cloud.'),
         )
     else:
         await callback.message.edit_text(
