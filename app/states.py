@@ -93,6 +93,8 @@ class AdminStates(StatesGroup):
     waiting_for_broadcast_message = State()
     waiting_for_broadcast_media = State()
     confirming_broadcast = State()
+    waiting_for_hwid_direct_message = State()
+    confirming_hwid_direct_message = State()
 
     creating_promo_group_name = State()
     creating_promo_group_priority = State()

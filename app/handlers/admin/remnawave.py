@@ -36,6 +36,7 @@ from app.services.remnawave_sync_service import (
 )
 from app.services.system_settings_service import bot_configuration_service
 from app.states import (
+    AdminStates,
     RemnaWaveSyncStates,
     SquadCreateStates,
     SquadMigrationStates,
@@ -372,6 +373,7 @@ def _build_hwid_conflicts_keyboard(
     current_page: int,
     total_pages: int,
     visible_targets_count: int,
+    visible_conflicts: list,
 ) -> types.InlineKeyboardMarkup:
     normalized_filter = _normalize_hwid_filter(filter_code)
     rows: list[list[types.InlineKeyboardButton]] = []
@@ -392,6 +394,16 @@ def _build_hwid_conflicts_keyboard(
     rows.append(filter_buttons[2:4])
     rows.append(filter_buttons[4:6])
     rows.append(filter_buttons[6:])
+
+    for conflict_index, conflict in enumerate(visible_conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT], start=1):
+        rows.append(
+            [
+                types.InlineKeyboardButton(
+                    text=f'✉️ {conflict_index}. {_short_hwid(conflict.hwid)} ({len(conflict.accounts)})',
+                    callback_data=f'admin_rw_hwid_conflict_open:{normalized_filter}:{current_page}:{conflict_index - 1}',
+                )
+            ]
+        )
 
     if visible_targets_count > 0:
         rows.append(
@@ -439,6 +451,126 @@ def _build_hwid_conflicts_keyboard(
         ]
     )
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_hwid_conflict_detail_text(
+    conflict,
+    *,
+    filter_code: str,
+    page: int,
+    conflict_index: int,
+) -> str:
+    normalized_filter = _normalize_hwid_filter(filter_code)
+    filter_label = _get_hwid_filter_label(normalized_filter)
+    telegram_targets = [account for account in conflict.accounts if account.telegram_id is not None]
+
+    lines = [
+        '🧬 <b>Детали HWID-конфликта</b>',
+        '',
+        f'🔎 <b>Фильтр:</b> {filter_label}',
+        f'📄 <b>Страница:</b> {page}',
+        f'🧩 <b>Конфликт:</b> {conflict_index + 1}',
+        f'🆔 <b>HWID:</b> <code>{html.escape(conflict.hwid)}</code>',
+        f'👥 <b>Аккаунтов:</b> {len(conflict.accounts)}',
+        f'📨 <b>Telegram-аккаунтов:</b> {len(telegram_targets)}',
+        '',
+        '<b>Аккаунты:</b>',
+    ]
+
+    for index, account in enumerate(conflict.accounts, start=1):
+        account_summary = _format_conflict_account_summary(account)
+        lines.append(f'{index}. {html.escape(account_summary)}')
+        if account.telegram_id is not None:
+            lines.append(f'   • Telegram ID: <code>{account.telegram_id}</code>')
+
+    return '\n'.join(lines)
+
+
+def _build_hwid_conflict_detail_keyboard(
+    conflict,
+    *,
+    filter_code: str,
+    page: int,
+    conflict_index: int,
+) -> types.InlineKeyboardMarkup:
+    normalized_filter = _normalize_hwid_filter(filter_code)
+    rows: list[list[types.InlineKeyboardButton]] = []
+
+    for account_index, account in enumerate(conflict.accounts):
+        if account.telegram_id is None:
+            continue
+
+        button_label = account.user_label or f'Аккаунт {account_index + 1}'
+        if len(button_label) > 28:
+            button_label = f'{button_label[:25]}...'
+
+        rows.append(
+            [
+                types.InlineKeyboardButton(
+                    text=f'✉️ {button_label}',
+                    callback_data=(
+                        f'admin_rw_hwid_conflict_message:{normalized_filter}:{page}:{conflict_index}:{account_index}'
+                    ),
+                )
+            ]
+        )
+
+    rows.append(
+        [
+            types.InlineKeyboardButton(
+                text='⬅️ К списку',
+                callback_data=f'admin_rw_hwid_conflicts_view:{normalized_filter}:{page}',
+            )
+        ]
+    )
+
+    return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _get_hwid_conflict_page(
+    report: HwidConflictScanResult,
+    *,
+    filter_code: str,
+    page: int,
+) -> tuple[list, int, int, dict[int, set[str]]]:
+    filtered_conflicts = _filter_conflicts(report.conflicts, filter_code)
+    visible_conflicts, current_page, total_pages = _paginate_conflicts(filtered_conflicts, page)
+    visible_targets = _collect_hwid_notification_targets(filtered_conflicts, filter_code)
+    return visible_conflicts, current_page, total_pages, visible_targets
+
+
+def _build_hwid_direct_message_prompt_text(target_label: str, telegram_id: int, hwid: str) -> str:
+    return (
+        '✉️ <b>Отправка сообщения аккаунту</b>\n\n'
+        f'👤 <b>Получатель:</b> {html.escape(target_label)}\n'
+        f'🆔 <b>Telegram ID:</b> <code>{telegram_id}</code>\n'
+        f'🧩 <b>HWID:</b> <code>{html.escape(hwid)}</code>\n\n'
+        'Отправьте произвольное сообщение для этого аккаунта.\n'
+        'Поддерживается HTML-разметка Telegram.'
+    )
+
+
+def _build_hwid_direct_message_preview_text(target_label: str, telegram_id: int, hwid: str, message_text: str) -> str:
+    return (
+        '👁️ <b>Предпросмотр сообщения</b>\n\n'
+        f'👤 <b>Получатель:</b> {html.escape(target_label)}\n'
+        f'🆔 <b>Telegram ID:</b> <code>{telegram_id}</code>\n'
+        f'🧩 <b>HWID:</b> <code>{html.escape(hwid)}</code>\n\n'
+        '<b>Сообщение:</b>\n'
+        f'{message_text}'
+    )
+
+
+def _build_hwid_direct_message_keyboard() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                types.InlineKeyboardButton(text='✅ Отправить', callback_data='admin_rw_hwid_direct_send'),
+                types.InlineKeyboardButton(text='✏️ Изменить', callback_data='admin_rw_hwid_direct_edit'),
+            ],
+            [types.InlineKeyboardButton(text='❌ Отмена', callback_data='admin_rw_hwid_direct_cancel')],
+        ]
+    )
 
 
 def _build_hwid_warning_message(hwids: set[str], *, filter_code: str) -> str:
@@ -1355,6 +1487,40 @@ def _parse_hwid_conflict_scan_callback(data: str) -> tuple[str, int]:
     return 'all', 1
 
 
+def _parse_hwid_conflict_open_callback(data: str) -> tuple[str, int, int]:
+    parts = data.strip().split(':')
+    if len(parts) >= 4 and parts[0] == 'admin_rw_hwid_conflict_open':
+        try:
+            page = max(1, int(parts[2]))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            conflict_index = max(0, int(parts[3]))
+        except (TypeError, ValueError):
+            conflict_index = 0
+        return _normalize_hwid_filter(parts[1]), page, conflict_index
+    return 'all', 1, 0
+
+
+def _parse_hwid_conflict_message_callback(data: str) -> tuple[str, int, int, int]:
+    parts = data.strip().split(':')
+    if len(parts) >= 5 and parts[0] == 'admin_rw_hwid_conflict_message':
+        try:
+            page = max(1, int(parts[2]))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            conflict_index = max(0, int(parts[3]))
+        except (TypeError, ValueError):
+            conflict_index = 0
+        try:
+            account_index = max(0, int(parts[4]))
+        except (TypeError, ValueError):
+            account_index = 0
+        return _normalize_hwid_filter(parts[1]), page, conflict_index, account_index
+    return 'all', 1, 0, 0
+
+
 def _build_hwid_conflict_fallback_keyboard() -> types.InlineKeyboardMarkup:
     return types.InlineKeyboardMarkup(
         inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
@@ -1386,9 +1552,11 @@ def _build_hwid_conflict_view(
     filter_code: str,
     page: int,
 ) -> tuple[str, types.InlineKeyboardMarkup, dict[int, set[str]]]:
-    filtered_conflicts = _filter_conflicts(report.conflicts, filter_code)
-    visible_conflicts, current_page, total_pages = _paginate_conflicts(filtered_conflicts, page)
-    visible_targets = _collect_hwid_notification_targets(filtered_conflicts, filter_code)
+    visible_conflicts, current_page, total_pages, visible_targets = _get_hwid_conflict_page(
+        report,
+        filter_code=filter_code,
+        page=page,
+    )
     visible_targets_count = len(visible_targets)
 
     text = _build_hwid_conflicts_text(
@@ -1404,6 +1572,7 @@ def _build_hwid_conflict_view(
         current_page=current_page,
         total_pages=total_pages,
         visible_targets_count=visible_targets_count,
+        visible_conflicts=visible_conflicts,
     )
     return text, keyboard, visible_targets
 
@@ -1585,6 +1754,325 @@ async def notify_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db
         parse_mode='HTML',
     )
     await callback.answer('Рассылка завершена')
+
+
+@admin_required
+@error_handler
+async def show_hwid_conflict_detail(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+    filter_code, page, conflict_index = _parse_hwid_conflict_open_callback(callback.data)
+    report = _get_cached_hwid_conflict_report()
+
+    if report is None:
+        await callback.answer('Сначала выполните сканирование HWID', show_alert=True)
+        return
+
+    visible_conflicts, current_page, total_pages, _visible_targets = _get_hwid_conflict_page(
+        report,
+        filter_code=filter_code,
+        page=page,
+    )
+
+    if not visible_conflicts:
+        text, keyboard, _ = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await callback.answer('По этому фильтру нет конфликтов')
+        return
+
+    safe_index = max(0, min(conflict_index, len(visible_conflicts) - 1))
+    conflict = visible_conflicts[safe_index]
+    text = _build_hwid_conflict_detail_text(
+        conflict,
+        filter_code=filter_code,
+        page=current_page,
+        conflict_index=safe_index,
+    )
+    keyboard = _build_hwid_conflict_detail_keyboard(
+        conflict,
+        filter_code=filter_code,
+        page=current_page,
+        conflict_index=safe_index,
+    )
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await callback.answer()
+
+
+@admin_required
+@error_handler
+async def prompt_hwid_direct_message(
+    callback: types.CallbackQuery,
+    db_user: User,
+    db: AsyncSession,
+    state: FSMContext,
+):
+    filter_code, page, conflict_index, account_index = _parse_hwid_conflict_message_callback(callback.data)
+    report = _get_cached_hwid_conflict_report()
+
+    if report is None:
+        await callback.answer('Сначала выполните сканирование HWID', show_alert=True)
+        return
+
+    visible_conflicts, current_page, _, _ = _get_hwid_conflict_page(report, filter_code=filter_code, page=page)
+    if not visible_conflicts:
+        await callback.answer('По этому фильтру нет конфликтов', show_alert=True)
+        return
+
+    safe_conflict_index = max(0, min(conflict_index, len(visible_conflicts) - 1))
+    conflict = visible_conflicts[safe_conflict_index]
+    if account_index >= len(conflict.accounts):
+        await callback.answer('Аккаунт не найден', show_alert=True)
+        return
+
+    account = conflict.accounts[account_index]
+    if account.telegram_id is None:
+        await callback.answer('У этого аккаунта нет Telegram ID', show_alert=True)
+        return
+
+    target_label = account.user_label or 'Неизвестный аккаунт'
+    await state.update_data(
+        hwid_direct_target_telegram_id=account.telegram_id,
+        hwid_direct_target_label=target_label,
+        hwid_direct_hwid=conflict.hwid,
+        hwid_direct_filter=filter_code,
+        hwid_direct_page=current_page,
+        hwid_direct_conflict_index=safe_conflict_index,
+        hwid_direct_account_index=account_index,
+    )
+    await state.set_state(AdminStates.waiting_for_hwid_direct_message)
+
+    text = _build_hwid_direct_message_prompt_text(target_label, account.telegram_id, conflict.hwid)
+    await callback.message.edit_text(
+        text,
+        reply_markup=types.InlineKeyboardMarkup(
+            inline_keyboard=[[types.InlineKeyboardButton(text='❌ Отмена', callback_data='admin_rw_hwid_direct_cancel')]]
+        ),
+        parse_mode='HTML',
+    )
+    await callback.answer()
+
+
+@admin_required
+@error_handler
+async def process_hwid_direct_message(
+    message: types.Message,
+    db_user: User,
+    state: FSMContext,
+):
+    data = await state.get_data()
+    telegram_id = data.get('hwid_direct_target_telegram_id')
+    target_label = data.get('hwid_direct_target_label') or 'Неизвестный аккаунт'
+    hwid = data.get('hwid_direct_hwid') or ''
+    filter_code = data.get('hwid_direct_filter') or 'all'
+    page = int(data.get('hwid_direct_page') or 1)
+    conflict_index = int(data.get('hwid_direct_conflict_index') or 0)
+    account_index = int(data.get('hwid_direct_account_index') or 0)
+
+    if not telegram_id:
+        await message.answer('❌ Не удалось определить получателя сообщения.')
+        await state.clear()
+        return
+
+    message_text = message.html_text or message.text or ''
+    if not message_text.strip():
+        await message.answer('❌ Сообщение не должно быть пустым.')
+        return
+
+    if len(message_text) > 4000:
+        await message.answer('❌ Сообщение слишком длинное. Максимум 4000 символов.')
+        return
+
+    await state.update_data(hwid_direct_message_text=message_text)
+
+    preview_text = _build_hwid_direct_message_preview_text(target_label, telegram_id, hwid, message_text)
+    preview_keyboard = _build_hwid_direct_message_keyboard()
+
+    try:
+        await message.answer(
+            preview_text,
+            reply_markup=preview_keyboard,
+            parse_mode='HTML',
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest:
+        await message.answer(
+            '❌ Не удалось показать предпросмотр. Проверьте HTML-разметку сообщения и отправьте текст ещё раз.',
+        )
+        return
+
+    await state.set_state(AdminStates.confirming_hwid_direct_message)
+    await state.update_data(
+        hwid_direct_filter=filter_code,
+        hwid_direct_page=page,
+        hwid_direct_conflict_index=conflict_index,
+        hwid_direct_account_index=account_index,
+    )
+
+
+@admin_required
+@error_handler
+async def confirm_hwid_direct_message(callback: types.CallbackQuery, db_user: User, state: FSMContext):
+    data = await state.get_data()
+    telegram_id = data.get('hwid_direct_target_telegram_id')
+    target_label = data.get('hwid_direct_target_label') or 'Неизвестный аккаунт'
+    hwid = data.get('hwid_direct_hwid') or ''
+    message_text = data.get('hwid_direct_message_text') or ''
+    filter_code = data.get('hwid_direct_filter') or 'all'
+    page = int(data.get('hwid_direct_page') or 1)
+    conflict_index = int(data.get('hwid_direct_conflict_index') or 0)
+    account_index = int(data.get('hwid_direct_account_index') or 0)
+
+    if not telegram_id or not message_text:
+        await callback.answer('Сообщение или получатель не найдены', show_alert=True)
+        return
+
+    try:
+        await callback.bot.send_message(
+            telegram_id,
+            message_text,
+            parse_mode='HTML',
+            disable_web_page_preview=True,
+        )
+    except TelegramRetryAfter as retry_error:
+        await asyncio.sleep(float(retry_error.retry_after))
+        try:
+            await callback.bot.send_message(
+                telegram_id,
+                message_text,
+                parse_mode='HTML',
+                disable_web_page_preview=True,
+            )
+        except Exception as send_error:
+            logger.warning('Ошибка повторной отправки точечного сообщения HWID', telegram_id=telegram_id, error=send_error)
+            await callback.answer('Не удалось отправить сообщение', show_alert=True)
+            return
+    except TelegramForbiddenError:
+        await callback.answer('Пользователь заблокировал бота или недоступен', show_alert=True)
+        return
+    except TelegramBadRequest as send_error:
+        logger.warning('Ошибка отправки точечного сообщения HWID', telegram_id=telegram_id, error=send_error)
+        await callback.answer('Не удалось отправить сообщение', show_alert=True)
+        return
+    except Exception as send_error:
+        logger.warning('Ошибка отправки точечного сообщения HWID', telegram_id=telegram_id, error=send_error)
+        await callback.answer('Не удалось отправить сообщение', show_alert=True)
+        return
+
+    report = _get_cached_hwid_conflict_report()
+    await state.clear()
+
+    if report is None:
+        await callback.message.edit_text(
+            f'✅ <b>Сообщение отправлено</b>\n\n'
+            f'👤 <b>Получатель:</b> {html.escape(target_label)}\n'
+            f'🆔 <b>Telegram ID:</b> <code>{telegram_id}</code>\n'
+            f'🧩 <b>HWID:</b> <code>{html.escape(hwid)}</code>',
+            reply_markup=_build_hwid_conflict_fallback_keyboard(),
+            parse_mode='HTML',
+        )
+        await callback.answer('Сообщение отправлено')
+        return
+
+    visible_conflicts, current_page, _, _ = _get_hwid_conflict_page(report, filter_code=filter_code, page=page)
+    if not visible_conflicts:
+        text, keyboard, _ = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
+        await callback.message.edit_text(
+            '✅ <b>Сообщение отправлено</b>\n\n' + text,
+            reply_markup=keyboard,
+            parse_mode='HTML',
+        )
+        await callback.answer('Сообщение отправлено')
+        return
+
+    safe_conflict_index = max(0, min(conflict_index, len(visible_conflicts) - 1))
+    conflict = visible_conflicts[safe_conflict_index]
+    detail_text = _build_hwid_conflict_detail_text(
+        conflict,
+        filter_code=filter_code,
+        page=current_page,
+        conflict_index=safe_conflict_index,
+    )
+    detail_keyboard = _build_hwid_conflict_detail_keyboard(
+        conflict,
+        filter_code=filter_code,
+        page=current_page,
+        conflict_index=safe_conflict_index,
+    )
+    result_text = (
+        '✅ <b>Сообщение отправлено</b>\n\n'
+        f'👤 <b>Получатель:</b> {html.escape(target_label)}\n'
+        f'🆔 <b>Telegram ID:</b> <code>{telegram_id}</code>\n'
+        f'🧩 <b>HWID:</b> <code>{html.escape(hwid)}</code>\n\n'
+        f'{detail_text}'
+    )
+    await callback.message.edit_text(result_text, reply_markup=detail_keyboard, parse_mode='HTML')
+    await callback.answer('Сообщение отправлено')
+
+
+@admin_required
+@error_handler
+async def edit_hwid_direct_message(callback: types.CallbackQuery, db_user: User, state: FSMContext):
+    data = await state.get_data()
+    telegram_id = data.get('hwid_direct_target_telegram_id')
+    target_label = data.get('hwid_direct_target_label') or 'Неизвестный аккаунт'
+    hwid = data.get('hwid_direct_hwid') or ''
+
+    if not telegram_id:
+        await callback.answer('Сообщение не подготовлено', show_alert=True)
+        return
+
+    await state.set_state(AdminStates.waiting_for_hwid_direct_message)
+    await callback.message.edit_text(
+        _build_hwid_direct_message_prompt_text(target_label, telegram_id, hwid),
+        reply_markup=types.InlineKeyboardMarkup(
+            inline_keyboard=[[types.InlineKeyboardButton(text='❌ Отмена', callback_data='admin_rw_hwid_direct_cancel')]]
+        ),
+        parse_mode='HTML',
+    )
+    await callback.answer()
+
+
+@admin_required
+@error_handler
+async def cancel_hwid_direct_message(callback: types.CallbackQuery, db_user: User, state: FSMContext):
+    data = await state.get_data()
+    filter_code = data.get('hwid_direct_filter') or 'all'
+    page = int(data.get('hwid_direct_page') or 1)
+    conflict_index = int(data.get('hwid_direct_conflict_index') or 0)
+    await state.clear()
+
+    report = _get_cached_hwid_conflict_report()
+    if report is None:
+        await callback.message.edit_text(
+            'Сценарий отправки сообщения отменён.',
+            reply_markup=_build_hwid_conflict_fallback_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    visible_conflicts, current_page, _, _ = _get_hwid_conflict_page(report, filter_code=filter_code, page=page)
+    if not visible_conflicts:
+        text, keyboard, _ = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await callback.answer()
+        return
+
+    safe_conflict_index = max(0, min(conflict_index, len(visible_conflicts) - 1))
+    conflict = visible_conflicts[safe_conflict_index]
+    await callback.message.edit_text(
+        _build_hwid_conflict_detail_text(
+            conflict,
+            filter_code=filter_code,
+            page=current_page,
+            conflict_index=safe_conflict_index,
+        ),
+        reply_markup=_build_hwid_conflict_detail_keyboard(
+            conflict,
+            filter_code=filter_code,
+            page=current_page,
+            conflict_index=safe_conflict_index,
+        ),
+        parse_mode='HTML',
+    )
+    await callback.answer('Отменено')
 
 
 @admin_required
@@ -3642,6 +4130,11 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(show_hwid_conflicts, F.data.startswith('admin_rw_hwid_conflicts_scan:'))
     dp.callback_query.register(show_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts_page_info')
     dp.callback_query.register(notify_hwid_conflicts, F.data.startswith('admin_rw_hwid_conflicts_notify:'))
+    dp.callback_query.register(show_hwid_conflict_detail, F.data.startswith('admin_rw_hwid_conflict_open:'))
+    dp.callback_query.register(prompt_hwid_direct_message, F.data.startswith('admin_rw_hwid_conflict_message:'))
+    dp.callback_query.register(confirm_hwid_direct_message, F.data == 'admin_rw_hwid_direct_send')
+    dp.callback_query.register(edit_hwid_direct_message, F.data == 'admin_rw_hwid_direct_edit')
+    dp.callback_query.register(cancel_hwid_direct_message, F.data == 'admin_rw_hwid_direct_cancel')
     dp.callback_query.register(show_system_stats, F.data == 'admin_rw_system')
     dp.callback_query.register(show_traffic_stats, F.data == 'admin_rw_traffic')
     dp.callback_query.register(show_nodes_management, F.data == 'admin_rw_nodes')
@@ -3690,6 +4183,8 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(process_squad_new_name, SquadRenameStates.waiting_for_new_name, F.text)
 
     dp.message.register(process_squad_name, SquadCreateStates.waiting_for_name, F.text)
+
+    dp.message.register(process_hwid_direct_message, AdminStates.waiting_for_hwid_direct_message, F.text)
 
     dp.message.register(
         save_auto_sync_schedule,
