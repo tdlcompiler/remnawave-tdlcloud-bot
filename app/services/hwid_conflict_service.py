@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +25,8 @@ _STATUS_PRIORITY = {
     SubscriptionStatus.LIMITED.value: 1,
 }
 
+_HWID_CONFLICT_REPORT_CACHE: HwidConflictScanResult | None = None
+
 
 @dataclass(slots=True)
 class HwidConflictAccount:
@@ -34,6 +36,8 @@ class HwidConflictAccount:
     user_label: str = 'Неизвестный аккаунт'
     subscription_id: int | None = None
     subscription_status: str | None = None
+    subscription_statuses: tuple[str, ...] = ()
+    subscription_count: int = 0
     tariff_name: str | None = None
 
 
@@ -50,15 +54,10 @@ class HwidConflictScanResult:
     unique_panel_users_in_conflicts: int
     unmatched_panel_users: int
     conflicts: list[HwidConflict]
-    telegram_targets: dict[int, set[str]] = field(default_factory=dict)
 
     @property
     def has_conflicts(self) -> bool:
         return self.duplicate_hwids > 0
-
-    @property
-    def telegram_targets_count(self) -> int:
-        return len(self.telegram_targets)
 
 
 class HwidConflictService:
@@ -66,6 +65,20 @@ class HwidConflictService:
 
     def __init__(self) -> None:
         self._remnawave_service = RemnaWaveService()
+
+    @staticmethod
+    def get_cached_report() -> HwidConflictScanResult | None:
+        return _HWID_CONFLICT_REPORT_CACHE
+
+    @staticmethod
+    def set_cached_report(report: HwidConflictScanResult | None) -> None:
+        global _HWID_CONFLICT_REPORT_CACHE
+        _HWID_CONFLICT_REPORT_CACHE = report
+
+    @staticmethod
+    def clear_cached_report() -> None:
+        global _HWID_CONFLICT_REPORT_CACHE
+        _HWID_CONFLICT_REPORT_CACHE = None
 
     async def scan_conflicts(self, db: AsyncSession) -> HwidConflictScanResult:
         async with self._remnawave_service.get_api_client() as api:
@@ -94,7 +107,6 @@ class HwidConflictService:
                 unique_panel_users_in_conflicts=0,
                 unmatched_panel_users=0,
                 conflicts=[],
-                telegram_targets={},
             )
 
         all_conflict_uuids = {panel_uuid for panel_uuids in duplicate_hwid_map.values() for panel_uuid in panel_uuids}
@@ -102,7 +114,6 @@ class HwidConflictService:
         unresolved_uuids = all_conflict_uuids - set(uuid_metadata.keys())
 
         conflicts: list[HwidConflict] = []
-        telegram_targets: dict[int, set[str]] = {}
 
         sorted_conflicts = sorted(
             duplicate_hwid_map.items(),
@@ -123,8 +134,6 @@ class HwidConflictService:
                     continue
 
                 accounts.append(account)
-                if account.telegram_id:
-                    telegram_targets.setdefault(account.telegram_id, set()).add(hwid)
 
             conflicts.append(HwidConflict(hwid=hwid, accounts=accounts))
 
@@ -134,7 +143,6 @@ class HwidConflictService:
             unique_panel_users_in_conflicts=len(all_conflict_uuids),
             unmatched_panel_users=len(unresolved_uuids),
             conflicts=conflicts,
-            telegram_targets=telegram_targets,
         )
 
     async def _load_uuid_metadata(
@@ -151,59 +159,63 @@ class HwidConflictService:
         subscriptions_query = (
             select(Subscription)
             .options(selectinload(Subscription.user), selectinload(Subscription.tariff))
+            .join(Subscription.user, isouter=True)
             .where(
-                Subscription.remnawave_uuid.in_(panel_uuids_list),
-                Subscription.status.in_(_ACTIVE_STATUSES),
+                or_(
+                    Subscription.remnawave_uuid.in_(panel_uuids_list),
+                    User.remnawave_uuid.in_(panel_uuids_list),
+                ),
             )
         )
         subscriptions_result = await db.execute(subscriptions_query)
         subscriptions = subscriptions_result.scalars().unique().all()
 
+        grouped_subscriptions: dict[str, list[Subscription]] = {}
+        grouped_users: dict[str, User] = {}
         for subscription in subscriptions:
-            panel_uuid = (subscription.remnawave_uuid or '').strip()
+            panel_uuid = self._extract_panel_uuid(subscription)
             if not panel_uuid:
                 continue
+            grouped_subscriptions.setdefault(panel_uuid, []).append(subscription)
+            if subscription.user and panel_uuid not in grouped_users:
+                grouped_users[panel_uuid] = subscription.user
 
-            user = subscription.user
-            if not user:
-                continue
-
-            account = HwidConflictAccount(
-                remnawave_uuid=panel_uuid,
-                user_id=user.id,
-                telegram_id=user.telegram_id,
-                user_label=self._build_user_label(user),
-                subscription_id=subscription.id,
-                subscription_status=subscription.status,
-                tariff_name=subscription.tariff.name if subscription.tariff else None,
+        unresolved_uuids = set(panel_uuids_list) - set(grouped_subscriptions.keys())
+        if unresolved_uuids:
+            users_query = (
+                select(User)
+                .options(selectinload(User.subscriptions).selectinload(Subscription.tariff))
+                .where(User.remnawave_uuid.in_(list(unresolved_uuids)))
             )
-            self._upsert_best_account(metadata, account)
+            users_result = await db.execute(users_query)
+            users = users_result.scalars().unique().all()
 
-        unresolved_uuids = set(panel_uuids_list) - set(metadata.keys())
-        if not unresolved_uuids:
-            return metadata
+            for user in users:
+                panel_uuid = (user.remnawave_uuid or '').strip()
+                if not panel_uuid:
+                    continue
 
-        users_query = (
-            select(User)
-            .options(selectinload(User.subscriptions).selectinload(Subscription.tariff))
-            .where(User.remnawave_uuid.in_(list(unresolved_uuids)))
-        )
-        users_result = await db.execute(users_query)
-        users = users_result.scalars().unique().all()
+                grouped_subscriptions.setdefault(panel_uuid, []).extend(user.subscriptions or [])
+                if panel_uuid not in grouped_users:
+                    grouped_users[panel_uuid] = user
 
-        for user in users:
-            panel_uuid = (user.remnawave_uuid or '').strip()
-            if not panel_uuid:
+        for panel_uuid, subscriptions_for_uuid in grouped_subscriptions.items():
+            if not subscriptions_for_uuid:
                 continue
 
-            best_subscription = self._pick_best_subscription(user.subscriptions or [])
+            user = grouped_users.get(panel_uuid) or next((sub.user for sub in subscriptions_for_uuid if sub.user), None)
+            best_subscription = self._pick_best_subscription(subscriptions_for_uuid)
+            subscription_statuses = tuple(sorted({sub.status for sub in subscriptions_for_uuid if sub.status}))
+
             account = HwidConflictAccount(
                 remnawave_uuid=panel_uuid,
-                user_id=user.id,
-                telegram_id=user.telegram_id,
-                user_label=self._build_user_label(user),
+                user_id=user.id if user else None,
+                telegram_id=user.telegram_id if user else None,
+                user_label=self._build_user_label(user) if user else 'Аккаунт не найден в БД бота',
                 subscription_id=best_subscription.id if best_subscription else None,
                 subscription_status=best_subscription.status if best_subscription else None,
+                subscription_statuses=subscription_statuses,
+                subscription_count=len(subscriptions_for_uuid),
                 tariff_name=best_subscription.tariff.name if best_subscription and best_subscription.tariff else None,
             )
             self._upsert_best_account(metadata, account)
@@ -264,6 +276,14 @@ class HwidConflictService:
             value = self._normalize_str(device.get(key))
             if value:
                 return value
+        return ''
+
+    def _extract_panel_uuid(self, subscription: Subscription) -> str:
+        panel_uuid = self._normalize_str(subscription.remnawave_uuid)
+        if panel_uuid:
+            return panel_uuid
+        if subscription.user:
+            return self._normalize_str(subscription.user.remnawave_uuid)
         return ''
 
     def _normalize_str(self, value: Any) -> str:

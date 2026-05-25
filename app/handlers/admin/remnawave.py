@@ -54,6 +54,48 @@ MIGRATION_PAGE_SIZE = 8
 HWID_CONFLICTS_PREVIEW_LIMIT = 10
 HWID_CONFLICT_USERS_PREVIEW_LIMIT = 4
 HWID_NOTIFY_HWIDS_PREVIEW_LIMIT = 5
+HWID_CONFLICTS_PAGE_SIZE = 10
+
+HWID_CONFLICT_FILTERS: dict[str, dict[str, Any]] = {
+    'all': {
+        'label': 'Все конфликты',
+        'statuses': None,
+    },
+    'active': {
+        'label': 'Есть активная',
+        'statuses': {'active'},
+    },
+    'trial': {
+        'label': 'Есть триал',
+        'statuses': {'trial'},
+    },
+    'active_trial': {
+        'label': 'Активная или триал',
+        'statuses': {'active', 'trial'},
+    },
+    'limited': {
+        'label': 'Есть лимит',
+        'statuses': {'limited'},
+    },
+    'disabled': {
+        'label': 'Есть отключенная',
+        'statuses': {'disabled'},
+    },
+    'expired': {
+        'label': 'Есть истекшая',
+        'statuses': {'expired'},
+    },
+}
+
+HWID_CONFLICT_FILTER_ORDER = ('all', 'active', 'trial', 'active_trial', 'limited', 'disabled', 'expired')
+HWID_CONFLICT_STATUS_ORDER = ('active', 'trial', 'limited', 'disabled', 'expired')
+HWID_CONFLICT_STATUS_LABELS = {
+    'active': 'активна',
+    'trial': 'триал',
+    'limited': 'лимит',
+    'disabled': 'отключена',
+    'expired': 'истекла',
+}
 
 
 def _format_duration(seconds: float) -> str:
@@ -99,40 +141,131 @@ def _short_hwid(hwid: str) -> str:
     return f'{normalized[:8]}…{normalized[-6:]}'
 
 
+def _normalize_hwid_filter(filter_code: str | None) -> str:
+    normalized = (filter_code or 'all').strip().lower()
+    return normalized if normalized in HWID_CONFLICT_FILTERS else 'all'
+
+
+def _get_hwid_filter_label(filter_code: str | None) -> str:
+    normalized = _normalize_hwid_filter(filter_code)
+    return HWID_CONFLICT_FILTERS[normalized]['label']
+
+
 def _format_subscription_status(status: str | None) -> str:
-    return {
-        'active': 'активна',
-        'trial': 'триал',
-        'limited': 'лимит',
-        'disabled': 'отключена',
-        'expired': 'истекла',
-    }.get((status or '').lower(), status or 'неизвестно')
+    return HWID_CONFLICT_STATUS_LABELS.get((status or '').lower(), status or 'неизвестно')
+
+
+def _format_subscription_statuses(statuses: tuple[str, ...] | list[str] | set[str]) -> str:
+    normalized = []
+    status_set = {str(status).strip().lower() for status in statuses if str(status).strip()}
+
+    for status in HWID_CONFLICT_STATUS_ORDER:
+        if status in status_set:
+            normalized.append(_format_subscription_status(status))
+
+    for status in sorted(status_set - set(HWID_CONFLICT_STATUS_ORDER)):
+        normalized.append(_format_subscription_status(status))
+
+    return ', '.join(normalized) if normalized else '—'
+
+
+def _get_account_statuses(account: HwidConflictAccount) -> tuple[str, ...]:
+    if account.subscription_statuses:
+        return tuple(status for status in account.subscription_statuses if status)
+    if account.subscription_status:
+        return (account.subscription_status,)
+    return ()
+
+
+def _account_matches_filter(account: HwidConflictAccount, filter_code: str) -> bool:
+    normalized = _normalize_hwid_filter(filter_code)
+    statuses = HWID_CONFLICT_FILTERS[normalized]['statuses']
+    if statuses is None:
+        return True
+
+    account_statuses = {status.strip().lower() for status in _get_account_statuses(account) if status}
+    return bool(account_statuses & statuses)
+
+
+def _conflict_matches_filter(conflict, filter_code: str) -> bool:
+    return any(_account_matches_filter(account, filter_code) for account in conflict.accounts)
+
+
+def _filter_conflicts(conflicts: list, filter_code: str) -> list:
+    normalized = _normalize_hwid_filter(filter_code)
+    return [conflict for conflict in conflicts if _conflict_matches_filter(conflict, normalized)]
+
+
+def _paginate_conflicts(conflicts: list, page: int) -> tuple[list, int, int]:
+    total_count = len(conflicts)
+    total_pages = max(1, math.ceil(total_count / HWID_CONFLICTS_PAGE_SIZE)) if total_count else 1
+    current_page = max(1, min(page, total_pages))
+    start = (current_page - 1) * HWID_CONFLICTS_PAGE_SIZE
+    end = start + HWID_CONFLICTS_PAGE_SIZE
+    return conflicts[start:end], current_page, total_pages
+
+
+def _collect_hwid_notification_targets(conflicts: list, filter_code: str) -> dict[int, set[str]]:
+    targets: dict[int, set[str]] = {}
+    normalized = _normalize_hwid_filter(filter_code)
+
+    for conflict in conflicts:
+        for account in conflict.accounts:
+            if not _account_matches_filter(account, normalized):
+                continue
+            if account.telegram_id is None:
+                continue
+            targets.setdefault(account.telegram_id, set()).add(conflict.hwid)
+
+    return targets
 
 
 def _format_conflict_account_summary(account: HwidConflictAccount) -> str:
     summary = account.user_label or 'Неизвестный аккаунт'
     details = []
 
+    if account.subscription_count > 0:
+        subscription_label = 'подписка' if account.subscription_count == 1 else 'подписок'
+        details.append(f'{account.subscription_count} {subscription_label}')
+
+    statuses = _format_subscription_statuses(_get_account_statuses(account))
+    if statuses != '—':
+        details.append(f'статусы: {statuses}')
+
     if account.subscription_id:
-        details.append(f'подписка #{account.subscription_id}')
+        details.append(f'основная #{account.subscription_id}')
+
     if account.tariff_name:
         details.append(f'тариф {account.tariff_name}')
-    if account.subscription_status:
-        details.append(f'статус {_format_subscription_status(account.subscription_status)}')
 
     if details:
         return f'{summary} ({", ".join(details)})'
     return summary
 
 
-def _build_hwid_conflicts_text(report: HwidConflictScanResult) -> str:
+def _build_hwid_conflicts_text(
+    report: HwidConflictScanResult,
+    *,
+    filter_code: str,
+    page: int,
+    total_pages: int,
+    visible_conflicts: list,
+    visible_targets_count: int,
+) -> str:
+    normalized_filter = _normalize_hwid_filter(filter_code)
+    filter_label = _get_hwid_filter_label(normalized_filter)
+
     lines = [
         '🧬 <b>Проверка конфликтов HWID</b>',
         '',
+        f'🔎 <b>Фильтр:</b> {filter_label}',
+        f'📄 <b>Страница:</b> {page}/{total_pages}',
+        '',
         f'📱 Проверено устройств: <b>{report.scanned_devices}</b>',
-        f'⚠️ Конфликтных HWID: <b>{report.duplicate_hwids}</b>',
+        f'⚠️ Конфликтных HWID всего: <b>{report.duplicate_hwids}</b>',
+        f'📋 Конфликтов по фильтру: <b>{len(visible_conflicts)}</b>',
+        f'📨 Telegram-аккаунтов для уведомления: <b>{visible_targets_count}</b>',
         f'👥 Затронуто panel UUID: <b>{report.unique_panel_users_in_conflicts}</b>',
-        f'📨 Telegram-аккаунтов для уведомления: <b>{report.telegram_targets_count}</b>',
     ]
 
     if report.unmatched_panel_users:
@@ -147,14 +280,23 @@ def _build_hwid_conflicts_text(report: HwidConflictScanResult) -> str:
         )
         return '\n'.join(lines)
 
+    if not visible_conflicts:
+        lines.extend(
+            [
+                '',
+                'ℹ️ По выбранному фильтру конфликтов нет.',
+            ]
+        )
+        return '\n'.join(lines)
+
     lines.extend(
         [
             '',
-            '<b>Примеры конфликтов:</b>',
+            '<b>Список конфликтов:</b>',
         ]
     )
 
-    for index, conflict in enumerate(report.conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT], start=1):
+    for index, conflict in enumerate(visible_conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT], start=1):
         lines.append(f'{index}. <code>{html.escape(_short_hwid(conflict.hwid))}</code> — {len(conflict.accounts)} аккаунта(ов)')
 
         for account in conflict.accounts[:HWID_CONFLICT_USERS_PREVIEW_LIMIT]:
@@ -165,7 +307,7 @@ def _build_hwid_conflicts_text(report: HwidConflictScanResult) -> str:
         if hidden_accounts > 0:
             lines.append(f'   • … и еще {hidden_accounts}')
 
-    hidden_conflicts = len(report.conflicts) - HWID_CONFLICTS_PREVIEW_LIMIT
+    hidden_conflicts = len(visible_conflicts) - HWID_CONFLICTS_PREVIEW_LIMIT
     if hidden_conflicts > 0:
         lines.extend(
             [
@@ -177,38 +319,92 @@ def _build_hwid_conflicts_text(report: HwidConflictScanResult) -> str:
     return '\n'.join(lines)
 
 
-def _build_hwid_conflicts_keyboard(report: HwidConflictScanResult) -> types.InlineKeyboardMarkup:
+def _build_hwid_conflicts_keyboard(
+    *,
+    filter_code: str,
+    current_page: int,
+    total_pages: int,
+    visible_targets_count: int,
+) -> types.InlineKeyboardMarkup:
+    normalized_filter = _normalize_hwid_filter(filter_code)
     rows: list[list[types.InlineKeyboardButton]] = []
 
-    if report.telegram_targets_count > 0:
+    filter_buttons: list[types.InlineKeyboardButton] = []
+    for filter_key in HWID_CONFLICT_FILTER_ORDER:
+        label = HWID_CONFLICT_FILTERS[filter_key]['label']
+        if filter_key == normalized_filter:
+            label = f'✅ {label}'
+        filter_buttons.append(
+            types.InlineKeyboardButton(
+                text=label,
+                callback_data=f'admin_rw_hwid_conflicts_view:{filter_key}:1',
+            )
+        )
+
+    rows.append(filter_buttons[:2])
+    rows.append(filter_buttons[2:4])
+    rows.append(filter_buttons[4:6])
+    rows.append(filter_buttons[6:])
+
+    if visible_targets_count > 0:
         rows.append(
             [
                 types.InlineKeyboardButton(
-                    text=f'📨 Разослать предупреждение ({report.telegram_targets_count})',
-                    callback_data='admin_rw_hwid_conflicts_notify',
+                    text=f'📨 Разослать предупреждение ({visible_targets_count})',
+                    callback_data=f'admin_rw_hwid_conflicts_notify:{normalized_filter}:{current_page}',
                 )
             ]
         )
 
+    if total_pages > 1:
+        nav_row = []
+        if current_page > 1:
+            nav_row.append(
+                types.InlineKeyboardButton(
+                    text='⬅️',
+                    callback_data=f'admin_rw_hwid_conflicts_view:{normalized_filter}:{current_page - 1}',
+                )
+            )
+        nav_row.append(
+            types.InlineKeyboardButton(
+                text=f'{current_page}/{total_pages}',
+                callback_data='admin_rw_hwid_conflicts_page_info',
+            )
+        )
+        if current_page < total_pages:
+            nav_row.append(
+                types.InlineKeyboardButton(
+                    text='➡️',
+                    callback_data=f'admin_rw_hwid_conflicts_view:{normalized_filter}:{current_page + 1}',
+                )
+            )
+        rows.append(nav_row)
+
     rows.extend(
         [
-            [types.InlineKeyboardButton(text='🔄 Обновить', callback_data='admin_rw_hwid_conflicts')],
+            [
+                types.InlineKeyboardButton(
+                    text='🔄 Сканировать заново',
+                    callback_data=f'admin_rw_hwid_conflicts_scan:{normalized_filter}:{current_page}',
+                )
+            ],
             [types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')],
         ]
     )
     return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _build_hwid_warning_message(hwids: set[str]) -> str:
+def _build_hwid_warning_message(hwids: set[str], *, filter_code: str) -> str:
     sorted_hwids = sorted(hwids)
     preview_hwids = sorted_hwids[:HWID_NOTIFY_HWIDS_PREVIEW_LIMIT]
     preview_line = ', '.join(f'<code>{html.escape(_short_hwid(hwid))}</code>' for hwid in preview_hwids)
     hidden_hwids = len(sorted_hwids) - len(preview_hwids)
+    filter_label = _get_hwid_filter_label(filter_code)
 
     lines = [
         '⚠️ <b>Важное уведомление по Вашим подпискам</b>',
         '',
-        'Мы обнаружили, что одно и то же устройство используется сразу в нескольких подписках.',
+        f'Мы обнаружили конфликт HWID по фильтру: <b>{filter_label}</b>.',
         'Пожалуйста, удалите с устройства лишнюю подписку и оставьте только одну активную.',
         '',
         f'🧬 Конфликтных устройств: <b>{len(sorted_hwids)}</b>',
@@ -219,12 +415,7 @@ def _build_hwid_warning_message(hwids: set[str]) -> str:
     if hidden_hwids > 0:
         lines.append(f'… и еще {hidden_hwids}')
 
-    lines.extend(
-        [
-            '',
-            'Если нужна помощь, напишите в поддержку через меню бота (@tdlcloud).',
-        ]
-    )
+    lines.extend(['', 'Если нужна помощь, напишите в поддержку через меню бота (@tdlcloud).'])
     return '\n'.join(lines)
 
 
@@ -1083,92 +1274,207 @@ async def show_remnawave_menu(callback: types.CallbackQuery, db_user: User, db: 
     await callback.answer()
 
 
+def _parse_hwid_conflict_view_callback(data: str) -> tuple[str, int]:
+    normalized = data.strip()
+    if normalized == 'admin_rw_hwid_conflicts':
+        return 'all', 1
+
+    parts = normalized.split(':')
+    if len(parts) >= 3 and parts[0] == 'admin_rw_hwid_conflicts_view':
+        try:
+            page = max(1, int(parts[2]))
+        except (TypeError, ValueError):
+            page = 1
+        return _normalize_hwid_filter(parts[1]), page
+
+    return 'all', 1
+
+
+def _parse_hwid_conflict_notify_callback(data: str) -> str:
+    parts = data.strip().split(':')
+    if len(parts) >= 2 and parts[0] == 'admin_rw_hwid_conflicts_notify':
+        return _normalize_hwid_filter(parts[1])
+    return 'all'
+
+
+def _parse_hwid_conflict_scan_callback(data: str) -> tuple[str, int]:
+    parts = data.strip().split(':')
+    if len(parts) >= 3 and parts[0] == 'admin_rw_hwid_conflicts_scan':
+        try:
+            page = max(1, int(parts[2]))
+        except (TypeError, ValueError):
+            page = 1
+        return _normalize_hwid_filter(parts[1]), page
+    return 'all', 1
+
+
+def _build_hwid_conflict_fallback_keyboard() -> types.InlineKeyboardMarkup:
+    return types.InlineKeyboardMarkup(
+        inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
+    )
+
+
+def _build_hwid_conflict_error_keyboard() -> types.InlineKeyboardMarkup:
+    return _build_hwid_conflict_fallback_keyboard()
+
+
+async def _load_hwid_conflict_report(db: AsyncSession) -> HwidConflictScanResult:
+    conflict_service = HwidConflictService()
+    return await conflict_service.scan_conflicts(db)
+
+
+def _get_cached_hwid_conflict_report() -> HwidConflictScanResult | None:
+    return HwidConflictService.get_cached_report()
+
+
+async def _scan_and_cache_hwid_conflict_report(db: AsyncSession) -> HwidConflictScanResult:
+    report = await _load_hwid_conflict_report(db)
+    HwidConflictService.set_cached_report(report)
+    return report
+
+
+def _build_hwid_conflict_view(
+    report: HwidConflictScanResult,
+    *,
+    filter_code: str,
+    page: int,
+) -> tuple[str, types.InlineKeyboardMarkup, dict[int, set[str]]]:
+    filtered_conflicts = _filter_conflicts(report.conflicts, filter_code)
+    visible_conflicts, current_page, total_pages = _paginate_conflicts(filtered_conflicts, page)
+    visible_targets = _collect_hwid_notification_targets(filtered_conflicts, filter_code)
+    visible_targets_count = len(visible_targets)
+
+    text = _build_hwid_conflicts_text(
+        report,
+        filter_code=filter_code,
+        page=current_page,
+        total_pages=total_pages,
+        visible_conflicts=visible_conflicts,
+        visible_targets_count=visible_targets_count,
+    )
+    keyboard = _build_hwid_conflicts_keyboard(
+        filter_code=filter_code,
+        current_page=current_page,
+        total_pages=total_pages,
+        visible_targets_count=visible_targets_count,
+    )
+    return text, keyboard, visible_targets
+
+
 @admin_required
 @error_handler
 async def show_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
-    await callback.message.edit_text('🧬 Проверяю HWID в подписках...\n\nПожалуйста, подождите.', reply_markup=None)
-
-    conflict_service = HwidConflictService()
-
-    try:
-        report = await conflict_service.scan_conflicts(db)
-    except RemnaWaveConfigurationError as config_error:
-        await callback.message.edit_text(
-            f'❌ RemnaWave не настроен: {config_error}',
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
-            ),
-        )
-        await callback.answer()
-        return
-    except Exception as error:
-        logger.error('Ошибка проверки HWID конфликтов', error=error)
-        await callback.message.edit_text(
-            '❌ Не удалось выполнить проверку HWID. Проверьте логи и попробуйте снова.',
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
-            ),
-        )
-        await callback.answer()
+    if callback.data == 'admin_rw_hwid_conflicts_page_info':
+        await callback.answer('Это текущая страница.', show_alert=False)
         return
 
-    await callback.message.edit_text(
-        _build_hwid_conflicts_text(report),
-        reply_markup=_build_hwid_conflicts_keyboard(report),
-        parse_mode='HTML',
-    )
+    if callback.data.startswith('admin_rw_hwid_conflicts_scan:'):
+        filter_code, page = _parse_hwid_conflict_scan_callback(callback.data)
+        await callback.message.edit_text('🧬 Сканирую HWID в подписках...\n\nПожалуйста, подождите.', reply_markup=None)
+
+        try:
+            report = await _scan_and_cache_hwid_conflict_report(db)
+        except RemnaWaveConfigurationError as config_error:
+            await callback.message.edit_text(
+                f'❌ RemnaWave не настроен: {config_error}',
+                reply_markup=_build_hwid_conflict_fallback_keyboard(),
+            )
+            await callback.answer()
+            return
+        except Exception as error:
+            logger.error('Ошибка проверки HWID конфликтов', error=error)
+            await callback.message.edit_text(
+                '❌ Не удалось выполнить сканирование HWID. Проверьте логи и попробуйте снова.',
+                reply_markup=_build_hwid_conflict_error_keyboard(),
+            )
+            await callback.answer()
+            return
+
+        text, keyboard, _visible_targets = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await callback.answer()
+        return
+
+    filter_code, page = _parse_hwid_conflict_view_callback(callback.data)
+    cached_report = _get_cached_hwid_conflict_report()
+
+    if cached_report is None:
+        if callback.data == 'admin_rw_hwid_conflicts':
+            await callback.message.edit_text('🧬 Сканирую HWID в подписках...\n\nПожалуйста, подождите.', reply_markup=None)
+
+            try:
+                report = await _scan_and_cache_hwid_conflict_report(db)
+            except RemnaWaveConfigurationError as config_error:
+                await callback.message.edit_text(
+                    f'❌ RemnaWave не настроен: {config_error}',
+                    reply_markup=_build_hwid_conflict_fallback_keyboard(),
+                )
+                await callback.answer()
+                return
+            except Exception as error:
+                logger.error('Ошибка проверки HWID конфликтов', error=error)
+                await callback.message.edit_text(
+                    '❌ Не удалось выполнить сканирование HWID. Проверьте логи и попробуйте снова.',
+                    reply_markup=_build_hwid_conflict_error_keyboard(),
+                )
+                await callback.answer()
+                return
+
+            text, keyboard, _visible_targets = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
+            await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+            await callback.answer()
+            return
+
+        await callback.answer('Сначала выполните сканирование HWID', show_alert=True)
+        return
+
+    text, keyboard, _visible_targets = _build_hwid_conflict_view(cached_report, filter_code=filter_code, page=page)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
     await callback.answer()
 
 
 @admin_required
 @error_handler
 async def notify_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
-    await callback.message.edit_text(
-        '📨 Запускаю рассылку предупреждений по конфликтам HWID...\n\nПожалуйста, подождите.',
-        reply_markup=None,
-    )
+    filter_code = _parse_hwid_conflict_notify_callback(callback.data)
+    parts = callback.data.strip().split(':')
+    page = 1
+    if len(parts) >= 3:
+        try:
+            page = max(1, int(parts[2]))
+        except (TypeError, ValueError):
+            page = 1
 
-    conflict_service = HwidConflictService()
-
-    try:
-        report = await conflict_service.scan_conflicts(db)
-    except RemnaWaveConfigurationError as config_error:
-        await callback.message.edit_text(
-            f'❌ RemnaWave не настроен: {config_error}',
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
-            ),
-        )
-        await callback.answer()
-        return
-    except Exception as error:
-        logger.error('Ошибка подготовки рассылки по HWID конфликтам', error=error)
-        await callback.message.edit_text(
-            '❌ Не удалось выполнить рассылку. Проверьте логи и попробуйте снова.',
-            reply_markup=types.InlineKeyboardMarkup(
-                inline_keyboard=[[types.InlineKeyboardButton(text='⬅️ Назад', callback_data='admin_remnawave')]]
-            ),
-        )
-        await callback.answer()
+    report = _get_cached_hwid_conflict_report()
+    if report is None:
+        await callback.answer('Сначала выполните сканирование HWID', show_alert=True)
         return
 
-    if report.telegram_targets_count == 0:
-        no_targets_text = _build_hwid_conflicts_text(report) + '\n\nℹ️ Нет аккаунтов для рассылки уведомлений.'
+    filtered_conflicts = _filter_conflicts(report.conflicts, filter_code)
+    visible_targets = _collect_hwid_notification_targets(filtered_conflicts, filter_code)
+
+    if not visible_targets:
+        text, keyboard, _ = _build_hwid_conflict_view(report, filter_code=filter_code, page=1)
         await callback.message.edit_text(
-            no_targets_text,
-            reply_markup=_build_hwid_conflicts_keyboard(report),
+            text + '\n\nℹ️ Нет аккаунтов для рассылки уведомлений.',
+            reply_markup=keyboard,
             parse_mode='HTML',
         )
         await callback.answer('Нет получателей')
         return
 
-    total = report.telegram_targets_count
+    await callback.message.edit_text(
+        '📨 Запускаю рассылку предупреждений по конфликтам HWID...\n\nПожалуйста, подождите.',
+        reply_markup=None,
+    )
+
+    total = len(visible_targets)
     sent = 0
     blocked = 0
     failed = 0
 
-    for telegram_id, hwids in sorted(report.telegram_targets.items()):
-        message_text = _build_hwid_warning_message(hwids)
+    for telegram_id, hwids in sorted(visible_targets.items()):
+        message_text = _build_hwid_warning_message(hwids, filter_code=filter_code)
 
         try:
             await callback.bot.send_message(
@@ -1216,17 +1522,19 @@ async def notify_hwid_conflicts(callback: types.CallbackQuery, db_user: User, db
     result_lines = [
         '📨 <b>Рассылка по конфликтам HWID завершена</b>',
         '',
+        f'🔎 <b>Фильтр:</b> {_get_hwid_filter_label(filter_code)}',
         f'👥 Получателей: <b>{total}</b>',
         f'✅ Отправлено: <b>{sent}</b>',
         f'🚫 Бот заблокирован: <b>{blocked}</b>',
         f'❌ Ошибок: <b>{failed}</b>',
         '',
-        f'⚠️ Текущих конфликтных HWID: <b>{report.duplicate_hwids}</b>',
+        f'⚠️ Текущих конфликтных HWID: <b>{len(filtered_conflicts)}</b>',
     ]
 
+    text, keyboard, _ = _build_hwid_conflict_view(report, filter_code=filter_code, page=page)
     await callback.message.edit_text(
-        '\n'.join(result_lines),
-        reply_markup=_build_hwid_conflicts_keyboard(report),
+        '\n'.join(result_lines) + '\n\n' + text,
+        reply_markup=keyboard,
         parse_mode='HTML',
     )
     await callback.answer('Рассылка завершена')
@@ -3283,7 +3591,10 @@ async def show_squads_management(callback: types.CallbackQuery, db_user: User, d
 def register_handlers(dp: Dispatcher):
     dp.callback_query.register(show_remnawave_menu, F.data == 'admin_remnawave')
     dp.callback_query.register(show_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts')
-    dp.callback_query.register(notify_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts_notify')
+    dp.callback_query.register(show_hwid_conflicts, F.data.startswith('admin_rw_hwid_conflicts_view:'))
+    dp.callback_query.register(show_hwid_conflicts, F.data.startswith('admin_rw_hwid_conflicts_scan:'))
+    dp.callback_query.register(show_hwid_conflicts, F.data == 'admin_rw_hwid_conflicts_page_info')
+    dp.callback_query.register(notify_hwid_conflicts, F.data.startswith('admin_rw_hwid_conflicts_notify:'))
     dp.callback_query.register(show_system_stats, F.data == 'admin_rw_system')
     dp.callback_query.register(show_traffic_stats, F.data == 'admin_rw_traffic')
     dp.callback_query.register(show_nodes_management, F.data == 'admin_rw_nodes')
