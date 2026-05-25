@@ -264,7 +264,7 @@ def _format_conflict_account_summary(account: HwidConflictAccount) -> str:
     details = []
 
     if account.subscription_count > 0:
-        subscription_label = 'РїРѕРґРїРёСЃРєР°' if account.subscription_count == 1 else 'РїРѕРґРїРёСЃРѕРє'
+        subscription_label = 'подписка' if account.subscription_count == 1 else 'подписок'
         details.append(f'{account.subscription_count} {subscription_label}')
 
     if account.active_paid_count or account.active_trial_count:
@@ -276,8 +276,8 @@ def _format_conflict_account_summary(account: HwidConflictAccount) -> str:
         details.append('активные: ' + ', '.join(active_parts))
 
     statuses = _format_subscription_statuses(_get_account_statuses(account))
-    if statuses != 'вЂ”':
-        details.append(f'СЃС‚Р°С‚СѓСЃС‹: {statuses}')
+    if statuses != '—':
+        details.append(f'статусы: {statuses}')
 
     if account.subscription_id:
         details.append(f'основная #{account.subscription_id}')
