@@ -62,16 +62,13 @@ HWID_CONFLICT_FILTERS: dict[str, dict[str, Any]] = {
         'statuses': None,
     },
     'active': {
-        'label': 'Есть активная',
-        'statuses': {'active'},
+        'label': 'Есть активная платная',
     },
     'trial': {
         'label': 'Есть триал',
-        'statuses': {'trial'},
     },
     'active_trial': {
-        'label': 'Активная или триал',
-        'statuses': {'active', 'trial'},
+        'label': 'Только триал',
     },
     'limited': {
         'label': 'Есть лимит',
@@ -177,9 +174,35 @@ def _get_account_statuses(account: HwidConflictAccount) -> tuple[str, ...]:
     return ()
 
 
+def _account_has_active_paid(account: HwidConflictAccount) -> bool:
+    return account.active_paid_count > 0
+
+
+def _account_has_active_trial(account: HwidConflictAccount) -> bool:
+    return account.active_trial_count > 0
+
+
+def _conflict_has_active_paid(conflict) -> bool:
+    return any(_account_has_active_paid(account) for account in conflict.accounts)
+
+
+def _conflict_has_active_trial(conflict) -> bool:
+    return any(_account_has_active_trial(account) for account in conflict.accounts)
+
+
 def _account_matches_filter(account: HwidConflictAccount, filter_code: str) -> bool:
     normalized = _normalize_hwid_filter(filter_code)
-    statuses = HWID_CONFLICT_FILTERS[normalized]['statuses']
+
+    if normalized == 'all':
+        return True
+    if normalized == 'active':
+        return _account_has_active_paid(account)
+    if normalized == 'trial':
+        return _account_has_active_trial(account)
+    if normalized == 'active_trial':
+        return _account_has_active_trial(account) and not _account_has_active_paid(account)
+
+    statuses = HWID_CONFLICT_FILTERS[normalized].get('statuses')
     if statuses is None:
         return True
 
@@ -188,7 +211,12 @@ def _account_matches_filter(account: HwidConflictAccount, filter_code: str) -> b
 
 
 def _conflict_matches_filter(conflict, filter_code: str) -> bool:
-    return any(_account_matches_filter(account, filter_code) for account in conflict.accounts)
+    normalized = _normalize_hwid_filter(filter_code)
+
+    if normalized == 'active_trial':
+        return _conflict_has_active_trial(conflict) and not _conflict_has_active_paid(conflict)
+
+    return any(_account_matches_filter(account, normalized) for account in conflict.accounts)
 
 
 def _filter_conflicts(conflicts: list, filter_code: str) -> list:
@@ -210,6 +238,17 @@ def _collect_hwid_notification_targets(conflicts: list, filter_code: str) -> dic
     normalized = _normalize_hwid_filter(filter_code)
 
     for conflict in conflicts:
+        if normalized == 'active_trial':
+            if not _conflict_matches_filter(conflict, normalized):
+                continue
+            for account in conflict.accounts:
+                if account.telegram_id is None:
+                    continue
+                if not _account_has_active_trial(account):
+                    continue
+                targets.setdefault(account.telegram_id, set()).add(conflict.hwid)
+            continue
+
         for account in conflict.accounts:
             if not _account_matches_filter(account, normalized):
                 continue
@@ -225,12 +264,20 @@ def _format_conflict_account_summary(account: HwidConflictAccount) -> str:
     details = []
 
     if account.subscription_count > 0:
-        subscription_label = 'подписка' if account.subscription_count == 1 else 'подписок'
+        subscription_label = 'РїРѕРґРїРёСЃРєР°' if account.subscription_count == 1 else 'РїРѕРґРїРёСЃРѕРє'
         details.append(f'{account.subscription_count} {subscription_label}')
 
+    if account.active_paid_count or account.active_trial_count:
+        active_parts = []
+        if account.active_paid_count:
+            active_parts.append(f'платных {account.active_paid_count}')
+        if account.active_trial_count:
+            active_parts.append(f'триальных {account.active_trial_count}')
+        details.append('активные: ' + ', '.join(active_parts))
+
     statuses = _format_subscription_statuses(_get_account_statuses(account))
-    if statuses != '—':
-        details.append(f'статусы: {statuses}')
+    if statuses != 'вЂ”':
+        details.append(f'СЃС‚Р°С‚СѓСЃС‹: {statuses}')
 
     if account.subscription_id:
         details.append(f'основная #{account.subscription_id}')

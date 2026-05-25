@@ -38,6 +38,8 @@ class HwidConflictAccount:
     subscription_status: str | None = None
     subscription_statuses: tuple[str, ...] = ()
     subscription_count: int = 0
+    active_paid_count: int = 0
+    active_trial_count: int = 0
     tariff_name: str | None = None
 
 
@@ -206,6 +208,16 @@ class HwidConflictService:
             user = grouped_users.get(panel_uuid) or next((sub.user for sub in subscriptions_for_uuid if sub.user), None)
             best_subscription = self._pick_best_subscription(subscriptions_for_uuid)
             subscription_statuses = tuple(sorted({sub.status for sub in subscriptions_for_uuid if sub.status}))
+            active_paid_count = sum(
+                1
+                for sub in subscriptions_for_uuid
+                if sub.status == SubscriptionStatus.ACTIVE.value and not bool(getattr(sub, 'is_trial', False))
+            )
+            active_trial_count = sum(
+                1
+                for sub in subscriptions_for_uuid
+                if sub.status == SubscriptionStatus.ACTIVE.value and bool(getattr(sub, 'is_trial', False))
+            )
 
             account = HwidConflictAccount(
                 remnawave_uuid=panel_uuid,
@@ -216,6 +228,8 @@ class HwidConflictService:
                 subscription_status=best_subscription.status if best_subscription else None,
                 subscription_statuses=subscription_statuses,
                 subscription_count=len(subscriptions_for_uuid),
+                active_paid_count=active_paid_count,
+                active_trial_count=active_trial_count,
                 tariff_name=best_subscription.tariff.name if best_subscription and best_subscription.tariff else None,
             )
             self._upsert_best_account(metadata, account)
@@ -231,9 +245,11 @@ class HwidConflictService:
         if not existing or self._account_priority(candidate) > self._account_priority(existing):
             metadata[candidate.remnawave_uuid] = candidate
 
-    def _account_priority(self, account: HwidConflictAccount) -> tuple[int, int, int, int]:
+    def _account_priority(self, account: HwidConflictAccount) -> tuple[int, int, int, int, int, int]:
         return (
             _STATUS_PRIORITY.get(account.subscription_status or '', 0),
+            1 if account.active_paid_count else 0,
+            1 if account.active_trial_count else 0,
             1 if account.telegram_id else 0,
             1 if account.subscription_id else 0,
             1 if account.tariff_name else 0,
@@ -251,6 +267,7 @@ class HwidConflictService:
             active_subscriptions,
             key=lambda sub: (
                 _STATUS_PRIORITY.get(sub.status, 0),
+                1 if not bool(getattr(sub, 'is_trial', False)) else 0,
                 self._safe_timestamp(sub.end_date),
             ),
         )
