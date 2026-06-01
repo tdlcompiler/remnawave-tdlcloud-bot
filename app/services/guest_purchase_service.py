@@ -23,7 +23,7 @@ from app.database.crud.subscription import (
 )
 from app.database.crud.tariff import get_tariff_by_id
 from app.database.crud.transaction import create_transaction
-from app.database.crud.user import _get_or_create_default_promo_group
+from app.database.crud.user import _get_or_create_default_promo_group, create_unique_referral_code
 from app.database.models import (
     GuestPurchase,
     GuestPurchaseStatus,
@@ -672,6 +672,8 @@ async def _find_or_create_user(
             if not user.promo_group_id:
                 default_group = await _get_or_create_default_promo_group(db)
                 user.promo_group_id = default_group.id
+            if not user.referral_code:
+                user.referral_code = await create_unique_referral_code(db)
             return user, is_new_account
 
         # Create new email user with verified cabinet account
@@ -684,6 +686,7 @@ async def _find_or_create_user(
                 resolved_group = tariff_obj.allowed_promo_groups[0]
         if not resolved_group:
             resolved_group = await _get_or_create_default_promo_group(db)
+        referral_code = await create_unique_referral_code(db)
         user = User(
             auth_type='email',
             email=contact_value,
@@ -691,6 +694,7 @@ async def _find_or_create_user(
             email_verified_at=datetime.now(UTC),
             password_hash=hash_password(plain_password),
             promo_group_id=resolved_group.id,
+            referral_code=referral_code,
         )
         if purchase:
             purchase.cabinet_password = plain_password
@@ -718,6 +722,8 @@ async def _find_or_create_user(
                 if not user.promo_group_id:
                     default_group = await _get_or_create_default_promo_group(db)
                     user.promo_group_id = default_group.id
+                if not user.referral_code:
+                    user.referral_code = await create_unique_referral_code(db)
                 return user, is_new_account
             raise
         logger.info(
@@ -786,15 +792,19 @@ async def _find_or_create_user(
         if not user.promo_group_id:
             default_group = await _get_or_create_default_promo_group(db)
             user.promo_group_id = default_group.id
+        if not user.referral_code:
+            user.referral_code = await create_unique_referral_code(db)
         return user, False
 
     # Create new telegram user
     default_group = await _get_or_create_default_promo_group(db)
+    referral_code = await create_unique_referral_code(db)
     user = User(
         auth_type='telegram',
         username=username,
         telegram_id=resolved_telegram_id,
         promo_group_id=default_group.id,
+        referral_code=referral_code,
     )
     try:
         async with db.begin_nested():
@@ -808,6 +818,8 @@ async def _find_or_create_user(
                 if not user.promo_group_id:
                     default_group = await _get_or_create_default_promo_group(db)
                     user.promo_group_id = default_group.id
+                if not user.referral_code:
+                    user.referral_code = await create_unique_referral_code(db)
                 return user, False
         result = await db.execute(select(User).where(func.lower(User.username) == normalized))
         user = result.scalars().first()
@@ -815,6 +827,8 @@ async def _find_or_create_user(
             if not user.promo_group_id:
                 default_group = await _get_or_create_default_promo_group(db)
                 user.promo_group_id = default_group.id
+            if not user.referral_code:
+                user.referral_code = await create_unique_referral_code(db)
             return user, False
         raise
     logger.info(
@@ -1583,7 +1597,7 @@ async def _find_succeeded_provider_payment(
     ``amount_kopeks`` is ``None`` when the amount check should be skipped
     (e.g., CryptoBot where USD→RUB conversion introduces imprecision).
     """
-    from sqlalchemy import cast
+    from sqlalchemy import case, cast
     from sqlalchemy.types import JSON as SA_JSON
 
     from app.database.models import (
@@ -1603,11 +1617,23 @@ async def _find_succeeded_provider_payment(
 
     # --- CryptoBot: special case — payload field (text JSON), skip amount check ---
     if base_method == 'cryptobot':
+        # `CAST(payload AS json)` в WHERE небезопасен: Postgres не гарантирует
+        # порядок вычисления предикатов и может выполнить каст на не-JSON payload
+        # (например 'balance_2_10000' от пополнения баланса) ДО фильтра LIKE '{%',
+        # что роняет запрос с "invalid input syntax for type json" (Telegram-баг
+        # #607443). CASE гарантирует короткое замыкание — каст только для JSON-строк.
+        purchase_token_expr = case(
+            (
+                CryptoBotPayment.payload.like('{%'),
+                cast(CryptoBotPayment.payload, SA_JSON)['purchase_token'].as_string(),
+            ),
+            else_=None,
+        )
         result = await db.execute(
             select(CryptoBotPayment).where(
                 CryptoBotPayment.status == 'paid',
                 CryptoBotPayment.payload.like('{%'),
-                cast(CryptoBotPayment.payload, SA_JSON)['purchase_token'].as_string() == purchase_token,
+                purchase_token_expr == purchase_token,
             )
         )
         p = result.scalars().first()
