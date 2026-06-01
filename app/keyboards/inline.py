@@ -2636,7 +2636,7 @@ def get_change_devices_keyboard(
             action_text = ' (текущее)'
             price_text = ''
         elif devices_count > current_devices:
-            emoji = '➕'
+            emoji = '📈'
 
             current_chargeable = max(0, current_devices - default_device_limit)
             new_chargeable = max(0, devices_count - default_device_limit)
@@ -2659,7 +2659,7 @@ def get_change_devices_keyboard(
                 price_text = ' (бесплатно)'
                 action_text = ''
         else:
-            emoji = '➖'
+            emoji = '📉'
             action_text = ''
             price_text = ' (без возврата)'
 
