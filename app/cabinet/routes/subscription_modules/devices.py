@@ -292,6 +292,7 @@ async def purchase_devices_legacy(
 
     # Отправляем уведомление админам
     try:
+        from app.bot_factory import create_bot
         from app.services.admin_notification_service import AdminNotificationService
 
         if getattr(settings, 'ADMIN_NOTIFICATIONS_ENABLED', False):
