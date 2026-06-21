@@ -23,29 +23,27 @@ async def create_tv_auth_token() -> str:
 
 async def submit_tv_auth_data(
     token: str, 
-    sub_url: str | None = None, 
-    lk_token: str | None = None,
-    refresh_token: str | None = None
+    sub_url: Optional[str] = None, 
+    lk_token: Optional[str] = None,
+    refresh_token: Optional[str] = None
 ) -> bool:
     """Сохраняем данные, присланные с мобильного устройства."""
-    # Получаем текущие данные токена из кэша
-    raw_data = await cache.get(f"tv_auth:{token}")
-    if not raw_data:
+    # 1. Сначала проверяем, существует ли токен вообще
+    exists = await cache.get(f"tv_auth:{token}")
+    if not exists:
         return False
         
-    # Обновляем данные, добавляя refresh_token
     payload = {
         "status": "completed",
         "sub_url": sub_url,
         "lk_token": lk_token,
-        "refresh_token": refresh_token  # <--- Сохраняем в кэш
+        "refresh_token": refresh_token
     }
     
-    # Сохраняем обратно в Redis с тем же TTL
-    await cache.setex(
-        f"tv_auth:{token}",
-        TV_AUTH_TOKEN_TTL,
-        json.dumps(payload)
+    await cache.set(
+        f"tv_auth:{token}", 
+        json.dumps(payload), 
+        expire=TV_AUTH_TOKEN_TTL
     )
     return True
 
