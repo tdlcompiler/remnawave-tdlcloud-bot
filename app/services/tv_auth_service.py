@@ -29,7 +29,7 @@ async def submit_tv_auth_data(
 ) -> bool:
     """Сохраняем данные, присланные с мобильного устройства."""
     # Получаем текущие данные токена из кэша
-    raw_data = await redis_client.get(f"tv_auth:{token}")
+    raw_data = await cache.get(f"tv_auth:{token}")
     if not raw_data:
         return False
         
@@ -42,7 +42,7 @@ async def submit_tv_auth_data(
     }
     
     # Сохраняем обратно в Redis с тем же TTL
-    await redis_client.setex(
+    await cache.setex(
         f"tv_auth:{token}",
         TV_AUTH_TOKEN_TTL,
         json.dumps(payload)
@@ -51,14 +51,14 @@ async def submit_tv_auth_data(
 
 async def consume_tv_auth_token(token: str) -> dict:
     """Забираем данные и сразу удаляем токен (единоразовое использование)."""
-    raw_data = await redis_client.get(f"tv_auth:{token}")
+    raw_data = await cache.get(f"tv_auth:{token}")
     if not raw_data:
         return {}
         
     data = json.loads(raw_data)
     
     # Удаляем токен, чтобы избежать повторного использования (и 410 ошибки позже)
-    await redis_client.delete(f"tv_auth:{token}")
+    await cache.delete(f"tv_auth:{token}")
     
     return data
 
