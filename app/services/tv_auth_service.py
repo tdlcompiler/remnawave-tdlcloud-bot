@@ -23,9 +23,9 @@ async def create_tv_auth_token() -> str:
 
 async def submit_tv_auth_data(
     token: str, 
-    sub_url: Optional[str] = None, 
-    lk_token: Optional[str] = None,
-    refresh_token: Optional[str] = None
+    sub_url: str | None = None, 
+    lk_token: str | None = None,
+    refresh_token: str | None = None
 ) -> bool:
     """Сохраняем данные, присланные с мобильного устройства."""
     # 1. Сначала проверяем, существует ли токен вообще
