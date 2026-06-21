@@ -229,12 +229,14 @@ class TVAuthTokenResponse(BaseModel):
 
 
 class TVAuthSubmitRequest(BaseModel):
-    token: str = Field(..., min_length=16, max_length=128)
-    sub_url: str | None = None
-    lk_token: str | None = None
+    token: str
+    sub_url: Optional[str] = None
+    lk_token: Optional[str] = None
+    refresh_token: Optional[str] = None
 
 
 class TVAuthPollResponse(BaseModel):
-    status: str  # "pending" или "completed"
-    sub_url: str | None = None
-    lk_token: str | None = None
+    status: str
+    sub_url: Optional[str] = None
+    lk_token: Optional[str] = None
+    refresh_token: Optional[str] = None

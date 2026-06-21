@@ -34,27 +34,31 @@ async def submit_tv_data(request: TVAuthSubmitRequest):
     success = await submit_tv_auth_data(
         token=request.token,
         sub_url=request.sub_url,
-        lk_token=request.lk_token
+        lk_token=request.lk_token,
+        refresh_token=request.refresh_token  # <--- Передаем в сервис
     )
     if not success:
         raise HTTPException(status_code=404, detail="Token expired or invalid")
     return {"status": "ok"}
 
 @router.post('/poll', response_model=TVAuthPollResponse)
-async def poll_tv_token(request: TVAuthSubmitRequest): # Используем тот же формат где есть token
+async def poll_tv_token(request: TVAuthSubmitRequest):
     """Эндпоинт для ТВ: ожидание данных от телефона."""
     data = await poll_tv_auth_token(request.token)
     
     if not data:
-        raise HTTPException(status_code=410, detail="Token expired")
+        # Важно: 410 заставит мобильное приложение прекратить поллинг
+        raise HTTPException(status_code=410, detail="Token expired or already consumed")
     
     if data.get('status') == 'pending':
         return TVAuthPollResponse(status='pending')
     
-    # Если статус completed, забираем данные и удаляем токен
+    # Если статус completed, забираем данные и удаляем токен из Redis/Cache
     consumed = await consume_tv_auth_token(request.token)
+    
     return TVAuthPollResponse(
         status='completed',
         sub_url=consumed.get('sub_url'),
-        lk_token=consumed.get('lk_token')
+        lk_token=consumed.get('lk_token'),
+        refresh_token=consumed.get('refresh_token')  # <--- Возвращаем на ТВ
     )
