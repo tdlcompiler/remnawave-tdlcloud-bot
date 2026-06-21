@@ -30,9 +30,9 @@ async def request_tv_token(request: Request):
 
 async def submit_tv_auth_data(
     token: str, 
-    sub_url: Optional[str] = None, 
-    lk_token: Optional[str] = None,
-    refresh_token: Optional[str] = None  # <--- Добавьте этот аргумент
+    sub_url: str | None = None, 
+    lk_token: str | None = None,
+    refresh_token: str | None = None  # <--- Добавьте этот аргумент
 ) -> bool:
     """Сохраняем данные, присланные с мобильного устройства."""
     # Получаем текущие данные токена из кэша
