@@ -63,6 +63,7 @@ from .promocode import router as promocode_router
 from .referral import router as referral_router
 from .site_verification import router as site_verification_router
 from .subscription import router as subscription_router
+from .tv_auth import router as tv_auth_router
 from .subscription_modules.multi_tariff import router as multi_tariff_subscription_router
 from .ticket_notifications import (
     admin_router as admin_ticket_notifications_router,
@@ -91,6 +92,7 @@ router.include_router(subscription_router)
 router.include_router(multi_tariff_subscription_router)
 router.include_router(balance_router)
 router.include_router(referral_router)
+router.include_router(tv_auth_router)
 
 # Apple IAP routes
 router.include_router(apple_iap_router)

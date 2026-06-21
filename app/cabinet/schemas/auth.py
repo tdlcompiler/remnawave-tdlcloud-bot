@@ -221,3 +221,20 @@ class DeepLinkPollRequest(BaseModel):
         pattern=r'^[a-zA-Z0-9_-]+$',
         description='Campaign slug captured from cabinet URL',
     )
+
+
+class TVAuthTokenResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
+class TVAuthSubmitRequest(BaseModel):
+    token: str = Field(..., min_length=16, max_length=128)
+    sub_url: str | None = None
+    lk_token: str | None = None
+
+
+class TVAuthPollResponse(BaseModel):
+    status: str  # "pending" или "completed"
+    sub_url: str | None = None
+    lk_token: str | None = None
