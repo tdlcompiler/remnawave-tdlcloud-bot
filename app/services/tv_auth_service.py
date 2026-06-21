@@ -1,5 +1,6 @@
 import secrets
 from datetime import UTC, datetime
+import json
 from typing import Any
 import structlog
 from app.utils.cache import cache, cache_key
@@ -27,9 +28,10 @@ async def submit_tv_auth_data(
     lk_token: str | None = None,
     refresh_token: str | None = None
 ) -> bool:
-    """Сохраняем данные, присланные с мобильного устройства."""
-    # 1. Сначала проверяем, существует ли токен вообще
-    exists = await cache.get(f"tv_auth:{token}")
+    key = cache_key(TV_AUTH_PREFIX, token) # Используем один и тот же генератор ключа!
+    
+    # Сначала проверяем существование
+    exists = await cache.get(key)
     if not exists:
         return False
         
@@ -40,24 +42,25 @@ async def submit_tv_auth_data(
         "refresh_token": refresh_token
     }
     
-    await cache.set(
-        f"tv_auth:{token}", 
-        json.dumps(payload), 
-        expire=TV_AUTH_TOKEN_TTL
-    )
+    # Кладем СЛОВАРЬ, а не строку JSON
+    await cache.set(key, payload, expire=TV_AUTH_TOKEN_TTL)
     return True
 
 async def consume_tv_auth_token(token: str) -> dict:
-    """Забираем данные и сразу удаляем токен (единоразовое использование)."""
-    raw_data = await cache.get(f"tv_auth:{token}")
-    if not raw_data:
+    key = cache_key(TV_AUTH_PREFIX, token)
+    data = await cache.get(key)
+    if not data:
         return {}
-        
-    data = json.loads(raw_data)
     
-    # Удаляем токен, чтобы избежать повторного использования (и 410 ошибки позже)
-    await cache.delete(f"tv_auth:{token}")
-    
+    # Если вдруг в кэше строка (на всякий случай), распарсим. 
+    # Но если везде класть dict, то data уже будет словарем.
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except:
+            pass
+            
+    await cache.delete(key)
     return data
 
 async def poll_tv_auth_token(token: str) -> dict[str, Any] | None:
