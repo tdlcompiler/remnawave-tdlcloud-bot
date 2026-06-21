@@ -230,13 +230,13 @@ class TVAuthTokenResponse(BaseModel):
 
 class TVAuthSubmitRequest(BaseModel):
     token: str
-    sub_url: Optional[str] = None
-    lk_token: Optional[str] = None
-    refresh_token: Optional[str] = None
+    sub_url: str | None = None
+    lk_token: str | None = None
+    refresh_token: str | None = None
 
 
 class TVAuthPollResponse(BaseModel):
     status: str
-    sub_url: Optional[str] = None
-    lk_token: Optional[str] = None
-    refresh_token: Optional[str] = None
+    sub_url: str | None = None
+    lk_token: str | None = None
+    refresh_token: str | None = None
