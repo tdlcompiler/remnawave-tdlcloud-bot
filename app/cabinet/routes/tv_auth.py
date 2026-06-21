@@ -32,7 +32,7 @@ async def submit_tv_auth_data(
     token: str, 
     sub_url: str | None = None, 
     lk_token: str | None = None,
-    refresh_token: str | None = None  # <--- Добавьте этот аргумент
+    refresh_token: str | None = None
 ) -> bool:
     """Сохраняем данные, присланные с мобильного устройства."""
     # Получаем текущие данные токена из кэша
@@ -56,7 +56,7 @@ async def submit_tv_auth_data(
     )
     return True
 
-async def consume_tv_auth_token(token: str) -> Dict:
+async def consume_tv_auth_token(token: str) -> dict:
     """Забираем данные и сразу удаляем токен (единоразовое использование)."""
     raw_data = await redis_client.get(f"tv_auth:{token}")
     if not raw_data:
