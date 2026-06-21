@@ -21,32 +21,48 @@ async def create_tv_auth_token() -> str:
     await cache.set(key, value, expire=TV_AUTH_TOKEN_TTL)
     return token
 
-async def submit_tv_auth_data(token: str, sub_url: str | None = None, lk_token: str | None = None) -> bool:
-    """Принимает данные от телефона и обновляет состояние токена."""
-    key = cache_key(TV_AUTH_PREFIX, token)
-    data: Any = await cache.get(key)
-
-    if not data or not isinstance(data, dict):
+async def submit_tv_auth_data(
+    token: str, 
+    sub_url: str | None = None, 
+    lk_token: str | None = None,
+    refresh_token: str | None = None
+) -> bool:
+    """Сохраняем данные, присланные с мобильного устройства."""
+    # Получаем текущие данные токена из кэша
+    raw_data = await redis_client.get(f"tv_auth:{token}")
+    if not raw_data:
         return False
-
-    if data.get('status') != 'pending':
-        return False
-
-    data['status'] = 'completed'
-    data['sub_url'] = sub_url
-    data['lk_token'] = lk_token
-    data['submitted_at'] = datetime.now(UTC).isoformat()
-
-    # Обновляем TTL, чтобы ТВ успел забрать данные
-    await cache.set(key, data, expire=TV_AUTH_COMPLETED_TTL)
+        
+    # Обновляем данные, добавляя refresh_token
+    payload = {
+        "status": "completed",
+        "sub_url": sub_url,
+        "lk_token": lk_token,
+        "refresh_token": refresh_token  # <--- Сохраняем в кэш
+    }
+    
+    # Сохраняем обратно в Redis с тем же TTL
+    await redis_client.setex(
+        f"tv_auth:{token}",
+        TV_AUTH_TOKEN_TTL,
+        json.dumps(payload)
+    )
     return True
+
+async def consume_tv_auth_token(token: str) -> dict:
+    """Забираем данные и сразу удаляем токен (единоразовое использование)."""
+    raw_data = await redis_client.get(f"tv_auth:{token}")
+    if not raw_data:
+        return {}
+        
+    data = json.loads(raw_data)
+    
+    # Удаляем токен, чтобы избежать повторного использования (и 410 ошибки позже)
+    await redis_client.delete(f"tv_auth:{token}")
+    
+    return data
 
 async def poll_tv_auth_token(token: str) -> dict[str, Any] | None:
     """Возвращает текущее состояние токена."""
     key = cache_key(TV_AUTH_PREFIX, token)
     return await cache.get(key)
-
-async def consume_tv_auth_token(token: str) -> dict[str, Any] | None:
-    """Атомарно забирает и удаляет данные (чтобы нельзя было использовать дважды)."""
-    key = cache_key(TV_AUTH_PREFIX, token)
-    return await cache.getdel(key)
