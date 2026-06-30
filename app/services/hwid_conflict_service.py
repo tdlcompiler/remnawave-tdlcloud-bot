@@ -289,7 +289,7 @@ class HwidConflictService:
         return ''
 
     def _extract_panel_user_uuid(self, device: dict[str, Any]) -> str:
-        for key in ('userUuid', 'userUUID', 'user_uuid'):
+        for key in ('userId', 'userUuid', 'userUUID', 'user_uuid'):
             value = self._normalize_str(device.get(key))
             if value:
                 return value
