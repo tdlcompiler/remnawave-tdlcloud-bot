@@ -548,7 +548,7 @@ class RemnaWaveAPI:
             )
 
             user = self._parse_user(response["response"])
-            return await self.enrich_user_with_happ_link(user)
+            return user
 
         except RemnaWaveAPIError as e:
             if e.status_code == 404:
