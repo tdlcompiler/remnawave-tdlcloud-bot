@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,14 +87,29 @@ class HwidConflictService:
         async with self._remnawave_service.get_api_client() as api:
             devices_data = await api.get_all_hwid_devices()
 
-        devices = devices_data.get('devices') or []
+            devices = devices_data.get('devices') or []
+            if not devices:
+                return HwidConflictScanResult(
+                    scanned_devices=0,
+                    duplicate_hwids=0,
+                    unique_panel_users_in_conflicts=0,
+                    unmatched_panel_users=0,
+                    conflicts=[],
+                )
+
+            user_ids = self._collect_user_ids(devices)
+            user_id_to_uuid = await self._load_user_uuid_map(api, user_ids) if user_ids else {}
+
         hwid_to_panel_uuids: dict[str, set[str]] = {}
+        unresolved_user_ids: set[int] = set()
 
         for device in devices:
             hwid = self._extract_hwid(device)
-            panel_uuid = self._extract_panel_user_uuid(device)
+            if not hwid:
+                continue
 
-            if not hwid or not panel_uuid:
+            panel_uuid = self._resolve_panel_uuid_for_device(device, user_id_to_uuid, unresolved_user_ids)
+            if not panel_uuid:
                 continue
 
             hwid_to_panel_uuids.setdefault(hwid, set()).add(panel_uuid)
@@ -107,7 +123,7 @@ class HwidConflictService:
                 scanned_devices=len(devices),
                 duplicate_hwids=0,
                 unique_panel_users_in_conflicts=0,
-                unmatched_panel_users=0,
+                unmatched_panel_users=len(unresolved_user_ids),
                 conflicts=[],
             )
 
@@ -143,9 +159,68 @@ class HwidConflictService:
             scanned_devices=len(devices),
             duplicate_hwids=len(duplicate_hwid_map),
             unique_panel_users_in_conflicts=len(all_conflict_uuids),
-            unmatched_panel_users=len(unresolved_uuids),
+            unmatched_panel_users=len(unresolved_uuids) + len(unresolved_user_ids),
             conflicts=conflicts,
         )
+
+    async def _load_user_uuid_map(
+        self,
+        api: Any,
+        user_ids: set[int],
+    ) -> dict[int, str]:
+        """
+        Загружает сопоставление panel userId -> panel uuid.
+
+        Порядок:
+        1) Если у API уже есть get_user_by_id — используем его с ограничением параллелизма.
+        2) Иначе делаем один проход по всем пользователям панели и строим индекс по user.id.
+        """
+        if not user_ids:
+            return {}
+
+        getter = getattr(api, 'get_user_by_id', None)
+        if callable(getter):
+            semaphore = asyncio.Semaphore(20)
+
+            async def fetch_one(user_id: int) -> tuple[int, str | None]:
+                async with semaphore:
+                    try:
+                        user = await getter(user_id)
+                    except Exception as error:
+                        logger.warning(
+                            'Не удалось получить пользователя панели по userId',
+                            user_id=user_id,
+                            error=error,
+                        )
+                        return user_id, None
+
+                    if not user:
+                        return user_id, None
+                    return user_id, getattr(user, 'uuid', None)
+
+            results = await asyncio.gather(*(fetch_one(user_id) for user_id in sorted(user_ids)))
+            return {user_id: uuid for user_id, uuid in results if uuid}
+
+        # Fallback: один полный проход по пользователям панели.
+        # Это медленнее, но работает даже без отдельного endpoint by-id.
+        try:
+            users = await api.get_all_users_stream(size=500, enrich_happ_links=False)
+        except Exception as error:
+            logger.error('Не удалось загрузить список пользователей панели', error=error)
+            return {}
+
+        result: dict[int, str] = {}
+        wanted_ids = set(user_ids)
+
+        for user in users:
+            user_id = getattr(user, 'id', None)
+            user_uuid = getattr(user, 'uuid', None)
+            if user_id is None or not user_uuid:
+                continue
+            if user_id in wanted_ids:
+                result[int(user_id)] = str(user_uuid)
+
+        return result
 
     async def _load_uuid_metadata(
         self,
@@ -174,6 +249,7 @@ class HwidConflictService:
 
         grouped_subscriptions: dict[str, list[Subscription]] = {}
         grouped_users: dict[str, User] = {}
+
         for subscription in subscriptions:
             panel_uuid = self._extract_panel_uuid(subscription)
             if not panel_uuid:
@@ -236,6 +312,36 @@ class HwidConflictService:
 
         return metadata
 
+    def _resolve_panel_uuid_for_device(
+        self,
+        device: dict[str, Any],
+        user_id_to_uuid: dict[int, str],
+        unresolved_user_ids: set[int],
+    ) -> str:
+        """
+        Возвращает UUID панели для HWID-девайса.
+
+        Приоритет:
+        1) userId -> uuid через карту
+        2) старые поля userUuid/userUUID/user_uuid, если они ещё приходят
+        """
+        user_id = self._extract_panel_user_id(device)
+        if user_id is not None:
+            panel_uuid = user_id_to_uuid.get(user_id)
+            if panel_uuid:
+                return panel_uuid
+            unresolved_user_ids.add(user_id)
+
+        return self._extract_panel_user_uuid(device)
+
+    def _collect_user_ids(self, devices: list[dict[str, Any]]) -> set[int]:
+        user_ids: set[int] = set()
+        for device in devices:
+            user_id = self._extract_panel_user_id(device)
+            if user_id is not None:
+                user_ids.add(user_id)
+        return user_ids
+
     def _upsert_best_account(
         self,
         metadata: dict[str, HwidConflictAccount],
@@ -288,8 +394,24 @@ class HwidConflictService:
                 return value
         return ''
 
+    def _extract_panel_user_id(self, device: dict[str, Any]) -> int | None:
+        for key in ('userId', 'user_id', 'userID'):
+            value = device.get(key)
+            user_id = self._normalize_int(value)
+            if user_id is not None:
+                return user_id
+
+        # Если вдруг поле осталось в старом виде, но внутри лежит строка-число.
+        value = device.get('userId')
+        if value is not None:
+            user_id = self._normalize_int(value)
+            if user_id is not None:
+                return user_id
+
+        return None
+
     def _extract_panel_user_uuid(self, device: dict[str, Any]) -> str:
-        for key in ('userId', 'userUuid', 'userUUID', 'user_uuid'):
+        for key in ('userUuid', 'userUUID', 'user_uuid'):
             value = self._normalize_str(device.get(key))
             if value:
                 return value
@@ -309,6 +431,26 @@ class HwidConflictService:
         if isinstance(value, str):
             return value.strip()
         return str(value).strip()
+
+    def _normalize_int(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _safe_timestamp(self, value: Any) -> float:
         if value is None:
