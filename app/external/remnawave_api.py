@@ -541,19 +541,19 @@ class RemnaWaveAPI:
         return await self.enrich_user_with_happ_link(user)
 
     async def get_user_by_id(self, user_id: int) -> RemnaWaveUser | None:
-    try:
-        response = await self._make_request(
-            "GET",
-            f"/api/users/by-id/{user_id}",
-        )
+        try:
+            response = await self._make_request(
+                "GET",
+                f"/api/users/by-id/{user_id}",
+            )
 
-        user = self._parse_user(response["response"])
-        return await self.enrich_user_with_happ_link(user)
+            user = self._parse_user(response["response"])
+            return await self.enrich_user_with_happ_link(user)
 
-    except RemnaWaveAPIError as e:
-        if e.status_code == 404:
-            return None
-        raise
+        except RemnaWaveAPIError as e:
+            if e.status_code == 404:
+                return None
+            raise
         
     async def get_user_by_uuid(self, uuid: str) -> RemnaWaveUser | None:
         try:
