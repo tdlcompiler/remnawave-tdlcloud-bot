@@ -300,6 +300,8 @@ def _build_hwid_conflicts_text(
     visible_conflicts: list,
     visible_targets_count: int,
 ) -> str:
+    MAX_MESSAGE_LENGTH = 3900
+
     normalized_filter = _normalize_hwid_filter(filter_code)
     filter_label = _get_hwid_filter_label(normalized_filter)
 
@@ -320,49 +322,65 @@ def _build_hwid_conflicts_text(
         lines.append(f'❓ Не сопоставлено с БД бота: <b>{report.unmatched_panel_users}</b>')
 
     if not report.has_conflicts:
-        lines.extend(
-            [
-                '',
-                '✅ Конфликтов не найдено.',
-            ]
-        )
+        lines.extend([
+            '',
+            '✅ Конфликтов не найдено.',
+        ])
         return '\n'.join(lines)
 
     if not visible_conflicts:
-        lines.extend(
-            [
-                '',
-                'ℹ️ По выбранному фильтру конфликтов нет.',
-            ]
-        )
+        lines.extend([
+            '',
+            'ℹ️ По выбранному фильтру конфликтов нет.',
+        ])
         return '\n'.join(lines)
 
-    lines.extend(
-        [
-            '',
-            '<b>Список конфликтов:</b>',
-        ]
-    )
+    lines.extend([
+        '',
+        '<b>Список конфликтов:</b>',
+    ])
+
+    current_length = len('\n'.join(lines))
+    hidden_due_to_limit = 0
 
     for index, conflict in enumerate(visible_conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT], start=1):
-        lines.append(f'{index}. <code>{html.escape(_short_hwid(conflict.hwid))}</code> — {len(conflict.accounts)} аккаунта(ов)')
+        conflict_lines = [
+            f'{index}. <code>{html.escape(_short_hwid(conflict.hwid))}</code> — {len(conflict.accounts)} аккаунта(ов)'
+        ]
 
         for account in conflict.accounts[:HWID_CONFLICT_USERS_PREVIEW_LIMIT]:
             account_summary = _format_conflict_account_summary(account)
-            lines.append(f'   • {html.escape(account_summary)}')
+            conflict_lines.append(f'   • {html.escape(account_summary)}')
 
         hidden_accounts = len(conflict.accounts) - HWID_CONFLICT_USERS_PREVIEW_LIMIT
         if hidden_accounts > 0:
-            lines.append(f'   • … и еще {hidden_accounts}')
+            conflict_lines.append(f'   • … и еще {hidden_accounts}')
+
+        block = '\n'.join(conflict_lines)
+        block_length = len(block) + 1  # +1 за перенос строки
+
+        if current_length + block_length > MAX_MESSAGE_LENGTH:
+            hidden_due_to_limit = (
+                len(visible_conflicts[:HWID_CONFLICTS_PREVIEW_LIMIT]) - index + 1
+            )
+            break
+
+        lines.extend(conflict_lines)
+        current_length += block_length
 
     hidden_conflicts = len(visible_conflicts) - HWID_CONFLICTS_PREVIEW_LIMIT
     if hidden_conflicts > 0:
-        lines.extend(
-            [
-                '',
-                f'… и еще <b>{hidden_conflicts}</b> конфликтов.',
-            ]
-        )
+        lines.extend([
+            '',
+            f'… и еще <b>{hidden_conflicts}</b> конфликтов.',
+        ])
+
+    if hidden_due_to_limit > 0:
+        lines.extend([
+            '',
+            f'<i>⚠️ Еще {hidden_due_to_limit} конфликтов не показано, '
+            f'так как сообщение достигло лимита Telegram.</i>',
+        ])
 
     return '\n'.join(lines)
 
@@ -1546,6 +1564,8 @@ async def _scan_and_cache_hwid_conflict_report(db: AsyncSession) -> HwidConflict
     return report
 
 
+MAX_TELEGRAM_HTML = 3900
+
 def _build_hwid_conflict_view(
     report: HwidConflictScanResult,
     *,
@@ -1557,6 +1577,7 @@ def _build_hwid_conflict_view(
         filter_code=filter_code,
         page=page,
     )
+
     visible_targets_count = len(visible_targets)
 
     text = _build_hwid_conflicts_text(
@@ -1566,7 +1587,9 @@ def _build_hwid_conflict_view(
         total_pages=total_pages,
         visible_conflicts=visible_conflicts,
         visible_targets_count=visible_targets_count,
+        max_chars=MAX_TELEGRAM_HTML,
     )
+
     keyboard = _build_hwid_conflicts_keyboard(
         filter_code=filter_code,
         current_page=current_page,
