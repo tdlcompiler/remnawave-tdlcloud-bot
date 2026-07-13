@@ -1587,7 +1587,6 @@ def _build_hwid_conflict_view(
         total_pages=total_pages,
         visible_conflicts=visible_conflicts,
         visible_targets_count=visible_targets_count,
-        max_chars=MAX_TELEGRAM_HTML,
     )
 
     keyboard = _build_hwid_conflicts_keyboard(
