@@ -1563,9 +1563,6 @@ async def _scan_and_cache_hwid_conflict_report(db: AsyncSession) -> HwidConflict
     HwidConflictService.set_cached_report(report)
     return report
 
-
-MAX_TELEGRAM_HTML = 3900
-
 def _build_hwid_conflict_view(
     report: HwidConflictScanResult,
     *,
