@@ -242,6 +242,53 @@ class StartupNotificationService:
                 f'<blockquote expandable>{system_info}</blockquote>\n\n'
                 f'<i>{timestamp}</i>'
             )
+            
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text='Вебкабинет',
+                            url=GITHUB_CABINET_URL,
+                        ),
+                    ],
+                ]
+            )
+
+            # Rich-вид (Bot API 10.1): логотип, заголовок, таблица показателей,
+            # footer с tg-time. При недоступности — классический вид ниже.
+            try:
+                from app.utils.rich_admin import rich_footer_now, rich_kv_table, try_send_rich_admin_message
+                from app.utils.rich_menu import _resolve_rich_logo_url
+
+                stats_rows = [
+                    ('Версия', f'<code>{html.escape(version)}</code>'),
+                    ('Пользователей', f'{users_count:,}'.replace(',', ' ')),
+                    ('Сумма балансов', html.escape(self._format_balance(total_balance_kopeks))),
+                    ('Платных подписок', f'{paid_subscriptions_count:,}'.replace(',', ' ')),
+                    ('Триальных подписок', f'{trial_subscriptions_count:,}'.replace(',', ' ')),
+                    ('Открытых тикетов', f'{open_tickets_count:,}'.replace(',', ' ')),
+                    ('Remnawave', f'{remnawave_icon} {html.escape(remnawave_status)}'),
+                ]
+                rich_blocks = []
+                logo_url = _resolve_rich_logo_url()
+                if logo_url:
+                    rich_blocks.append(f'<img src="{html.escape(logo_url, quote=True)}"/>')
+                rich_blocks.extend(
+                    [
+                        '<h5>🤖 TDL Cloud Bot</h5>',
+                        '<p>✅ Бот успешно запущен</p>',
+                        rich_kv_table(stats_rows),
+                        '<hr/>',
+                        rich_footer_now(),
+                    ]
+                )
+                if await try_send_rich_admin_message(
+                    self.bot, self.chat_id, ''.join(rich_blocks), thread_id=self.topic_id, reply_markup=keyboard
+                ):
+                    logger.info('Rich-стартовое уведомление отправлено в чат', chat_id=self.chat_id)
+                    return True
+            except Exception as rich_error:
+                logger.warning('Сбой rich-рендера стартового уведомления', error=str(rich_error))
 
             message_kwargs: dict = {
                 'chat_id': self.chat_id,
@@ -458,7 +505,7 @@ async def send_crash_notification(bot: Bot, error: Exception, traceback_str: str
 
         # Текст сообщения (escape HTML в error_type/message — они могут содержать <class ...>)
         message_text = (
-            f'<b>Remnawave Bedolaga Bot</b>\n\n'
+            f'<b>TDL Cloud Bot</b>\n\n'
             f'❌ Бот упал с ошибкой\n\n'
             f'<b>Тип:</b> <code>{html.escape(error_type)}</code>\n'
             f'<b>Сообщение:</b> <code>{html.escape(error_message[:CRASH_ERROR_PREVIEW_LENGTH])}</code>\n'
@@ -471,24 +518,11 @@ async def send_crash_notification(bot: Bot, error: Exception, traceback_str: str
 
         message_text += f'\n<i>{timestamp}</i>'
 
-        # Кнопка для связи с разработчиком
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text='💬 Сообщить разработчику',
-                        url=DEVELOPER_CONTACT_URL,
-                    ),
-                ],
-            ]
-        )
-
         message_kwargs: dict = {
             'chat_id': chat_id,
             'document': file,
             'caption': message_text,
             'parse_mode': ParseMode.HTML,
-            'reply_markup': keyboard,
         }
 
         if topic_id:
