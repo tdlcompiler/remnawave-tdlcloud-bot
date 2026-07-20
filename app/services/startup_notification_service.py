@@ -242,17 +242,6 @@ class StartupNotificationService:
                 f'<blockquote expandable>{system_info}</blockquote>\n\n'
                 f'<i>{timestamp}</i>'
             )
-            
-            keyboard = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text='Вебкабинет',
-                            url=GITHUB_CABINET_URL,
-                        ),
-                    ],
-                ]
-            )
 
             # Rich-вид (Bot API 10.1): логотип, заголовок, таблица показателей,
             # footer с tg-time. При недоступности — классический вид ниже.
@@ -283,7 +272,7 @@ class StartupNotificationService:
                     ]
                 )
                 if await try_send_rich_admin_message(
-                    self.bot, self.chat_id, ''.join(rich_blocks), thread_id=self.topic_id, reply_markup=keyboard
+                    self.bot, self.chat_id, ''.join(rich_blocks), thread_id=self.topic_id
                 ):
                     logger.info('Rich-стартовое уведомление отправлено в чат', chat_id=self.chat_id)
                     return True

@@ -280,17 +280,6 @@ async def send_error_to_admin_chat(
 
     _last_error_notification = now
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text='💬 Сообщить разработчику',
-                    url=DEVELOPER_CONTACT_URL,
-                ),
-            ],
-        ]
-    )
-
     # Rich-вид (Bot API 10.1): трейсбеки инлайн в сворачиваемых блоках с
     # подсветкой — лимит rich-сообщения 32768 символов против 1024 у caption,
     # так что .txt-файл не нужен. При недоступности/переполнении — классический
@@ -298,7 +287,7 @@ async def send_error_to_admin_chat(
     try:
         rich_html = _build_rich_error_report(now, error_type, context)
         if rich_html and await try_send_rich_admin_message(
-            bot, chat_id, rich_html, thread_id=topic_id, reply_markup=keyboard
+            bot, chat_id, rich_html, thread_id=topic_id
         ):
             _error_buffer.clear()
             logger.info('Rich-уведомление об ошибке отправлено в чат', chat_id=chat_id)
