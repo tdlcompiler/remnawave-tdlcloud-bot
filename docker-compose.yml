@@ -13,7 +13,7 @@ services:
       - ./data:/app/data
     networks:
       - bot_network
-      - remnawave-network
+      #- remnawave-network
     healthcheck:
       test:
         [
@@ -34,7 +34,7 @@ services:
       - redis_data:/data
     networks:
       - bot_network
-      - remnawave-network
+      #- remnawave-network
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 30s
@@ -84,7 +84,7 @@ services:
       - '${WEB_API_PORT:-8080}:8080'
     networks:
       - bot_network
-      - remnawave-network
+      #- remnawave-network
     healthcheck:
       test:
         [
@@ -99,13 +99,13 @@ services:
 volumes:
   postgres_data:
     external: true
-    name: remnawave-bedolaga-telegram-bot_postgres_data
+    name: remnawave-tdlcloud-bot_postgres_data
   redis_data:
-    external: true
-    name: remnawave-bedolaga-telegram-bot_redis_data
+    name: remnawave-tdlcloud-bot_redis_data
 
 networks:
   bot_network:
+    name: bot_network
     driver: bridge
     ipam:
       config:
@@ -113,6 +113,6 @@ networks:
           gateway: 172.21.0.1
     driver_opts:
       com.docker.network.driver.mtu: 1350
-  remnawave-network:
-    name: remnawave-network
-    external: true
+  # remnawave-network:
+    # name: remnawave-network
+    # external: true
