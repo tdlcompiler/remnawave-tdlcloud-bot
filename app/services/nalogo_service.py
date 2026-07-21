@@ -606,36 +606,59 @@ async def _download_receipt_file(receipt_url: str) -> tuple[bytes, str] | None:
     сторона откатывается к отправке ссылки). Использует NALOGO_PROXY_URL /
     PROXY_URL, если настроены. Файл нигде не сохраняется — только память.
     """
+    import asyncio
     import aiohttp
 
     timeout = aiohttp.ClientTimeout(total=20)
     proxy_url = settings.get_nalogo_proxy_url()
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(receipt_url, proxy=proxy_url) as resp:
-            if resp.status != 200:
-                logger.warning('Не удалось скачать чек NaloGO для отправки файлом', status=resp.status)
-                return None
+    
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(receipt_url, proxy=proxy_url) as resp:
+                if resp.status != 200:
+                    logger.warning('Не удалось скачать чек NaloGO для отправки файлом', status=resp.status)
+                    return None
 
-            content_type = (resp.headers.get('Content-Type') or '').lower()
-            # ФНС может отдать HTML (страница ошибки, техработы) с кодом 200 —
-            # отправлять её как «чек» нельзя, лучше откатиться на ссылку.
-            if not content_type.startswith('image/') and 'pdf' not in content_type:
-                logger.warning('Неожиданный формат печатной формы чека NaloGO', content_type=content_type)
-                return None
+                content_type = (resp.headers.get('Content-Type') or '').lower()
+                # ФНС может отдать HTML (страница ошибки, техработы) с кодом 200 —
+                # отправлять её как «чек» нельзя, лучше откатиться на ссылку.
+                if not content_type.startswith('image/') and 'pdf' not in content_type:
+                    logger.warning('Неожиданный формат печатной формы чека NaloGO', content_type=content_type)
+                    return None
 
-            if resp.content_length and resp.content_length > _RECEIPT_MAX_BYTES:
-                logger.warning('Печатная форма чека NaloGO слишком велика', content_length=resp.content_length)
-                return None
+                if resp.content_length and resp.content_length > _RECEIPT_MAX_BYTES:
+                    logger.warning('Печатная форма чека NaloGO слишком велика', content_length=resp.content_length)
+                    return None
 
-            # Читаем с запасом в 1 байт, чтобы отличить «ровно лимит» от «больше лимита»
-            data = await resp.content.read(_RECEIPT_MAX_BYTES + 1)
-            if not data:
-                return None
-            if len(data) > _RECEIPT_MAX_BYTES:
-                logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
-                return None
+                # Читаем с запасом в 1 байт, чтобы отличить «ровно лимит» от «больше лимита»
+                data = await resp.content.read(_RECEIPT_MAX_BYTES + 1)
+                if not data:
+                    return None
+                    
+                if len(data) > _RECEIPT_MAX_BYTES:
+                    logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
+                    return None
 
-            return data, content_type
+                # Проверяем целостность файла, если сервер передал заголовок Content-Length
+                if resp.content_length and len(data) < resp.content_length:
+                    logger.warning(
+                        'Чек скачался не полностью (обрезан потоком)', 
+                        expected=resp.content_length, 
+                        actual=len(data)
+                    )
+                    return None
+
+                return data, content_type
+
+    except aiohttp.ClientPayloadError as e:
+        logger.warning('Обрыв соединения при скачивании чека NaloGO', error=str(e))
+        return None
+    except asyncio.TimeoutError:
+        logger.warning('Таймаут при скачивании чека NaloGO')
+        return None
+    except aiohttp.ClientError as e:
+        logger.warning('Сетевая ошибка aiohttp при скачивании чека', error=str(e))
+        return None
 
 
 async def send_nalogo_receipt_notifications(
