@@ -597,14 +597,8 @@ _RECEIPT_MAX_BYTES = 10 * 1024 * 1024
 async def _download_receipt_file(receipt_url: str) -> tuple[bytes, str] | None:
     """Скачивает печатную форму чека для отправки файлом в Telegram.
 
-    lknpd.nalog.ru недоступен с зарубежных IP (и не отдаёт DNS зарубежным
-    резолверам), поэтому у клиентов с включённым VPN ссылка на чек не
-    открывается вовсе. Скачиваем чек на стороне сервера и отправляем сам файл —
-    тогда доступность nalog.ru со стороны клиента не имеет значения.
-
-    Возвращает (bytes, content_type) либо None при любой ошибке (вызывающая
-    сторона откатывается к отправке ссылки). Использует NALOGO_PROXY_URL /
-    PROXY_URL, если настроены. Файл нигде не сохраняется — только память.
+    lknpd.nalog.ru недоступен с зарубежных IP, поэтому скачиваем чек
+    на стороне сервера через прокси. Включает ретраи на случай обрывов потока.
     """
     import asyncio
     import aiohttp
@@ -612,53 +606,59 @@ async def _download_receipt_file(receipt_url: str) -> tuple[bytes, str] | None:
     timeout = aiohttp.ClientTimeout(total=20)
     proxy_url = settings.get_nalogo_proxy_url()
     
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(receipt_url, proxy=proxy_url) as resp:
-                if resp.status != 200:
-                    logger.warning('Не удалось скачать чек NaloGO для отправки файлом', status=resp.status)
-                    return None
+    max_retries = 3
+    retry_delay = 1.0  # Задержка между попытками в секундах
 
-                content_type = (resp.headers.get('Content-Type') or '').lower()
-                # ФНС может отдать HTML (страница ошибки, техработы) с кодом 200 —
-                # отправлять её как «чек» нельзя, лучше откатиться на ссылку.
-                if not content_type.startswith('image/') and 'pdf' not in content_type:
-                    logger.warning('Неожиданный формат печатной формы чека NaloGO', content_type=content_type)
-                    return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(receipt_url, proxy=proxy_url) as resp:
+                    if resp.status != 200:
+                        logger.warning('Не удалось скачать чек NaloGO', status=resp.status, attempt=attempt)
+                        if attempt == max_retries:
+                            return None
+                        await asyncio.sleep(retry_delay)
+                        continue
 
-                if resp.content_length and resp.content_length > _RECEIPT_MAX_BYTES:
-                    logger.warning('Печатная форма чека NaloGO слишком велика', content_length=resp.content_length)
-                    return None
+                    content_type = (resp.headers.get('Content-Type') or '').lower()
+                    if not content_type.startswith('image/') and 'pdf' not in content_type:
+                        logger.warning('Неожиданный формат печатной формы чека NaloGO', content_type=content_type)
+                        return None
 
-                # Читаем с запасом в 1 байт, чтобы отличить «ровно лимит» от «больше лимита»
-                data = await resp.content.read(_RECEIPT_MAX_BYTES + 1)
-                if not data:
-                    return None
-                    
-                if len(data) > _RECEIPT_MAX_BYTES:
-                    logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
-                    return None
+                    if resp.content_length and resp.content_length > _RECEIPT_MAX_BYTES:
+                        logger.warning('Печатная форма чека NaloGO слишком велика', content_length=resp.content_length)
+                        return None
 
-                # Проверяем целостность файла, если сервер передал заголовок Content-Length
-                if resp.content_length and len(data) < resp.content_length:
-                    logger.warning(
-                        'Чек скачался не полностью (обрезан потоком)', 
-                        expected=resp.content_length, 
-                        actual=len(data)
-                    )
-                    return None
+                    data = await resp.content.read(_RECEIPT_MAX_BYTES + 1)
+                    if not data:
+                        return None
+                        
+                    if len(data) > _RECEIPT_MAX_BYTES:
+                        logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
+                        return None
 
-                return data, content_type
+                    # Проверка целостности
+                    if resp.content_length and len(data) < resp.content_length:
+                        logger.warning(
+                            'Чек скачался не полностью (обрезан потоком), пробуем снова...', 
+                            attempt=attempt,
+                            expected=resp.content_length, 
+                            actual=len(data)
+                        )
+                        if attempt == max_retries:
+                            return None
+                        await asyncio.sleep(retry_delay)
+                        continue
 
-    except aiohttp.ClientPayloadError as e:
-        logger.warning('Обрыв соединения при скачивании чека NaloGO', error=str(e))
-        return None
-    except asyncio.TimeoutError:
-        logger.warning('Таймаут при скачивании чека NaloGO')
-        return None
-    except aiohttp.ClientError as e:
-        logger.warning('Сетевая ошибка aiohttp при скачивании чека', error=str(e))
-        return None
+                    return data, content_type
+
+        except (aiohttp.ClientPayloadError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(f'Ошибка сети при скачивании чека (попытка {attempt}/{max_retries}): {e}')
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(retry_delay)
+
+    return None
 
 
 async def send_nalogo_receipt_notifications(
