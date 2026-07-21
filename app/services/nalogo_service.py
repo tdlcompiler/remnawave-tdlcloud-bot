@@ -595,19 +595,15 @@ _RECEIPT_MAX_BYTES = 10 * 1024 * 1024
 
 
 async def _download_receipt_file(receipt_url: str) -> tuple[bytes, str] | None:
-    """Скачивает печатную форму чека для отправки файлом в Telegram.
-
-    lknpd.nalog.ru недоступен с зарубежных IP, поэтому скачиваем чек
-    на стороне сервера через прокси. Включает ретраи на случай обрывов потока.
-    """
+    """Скачивает печатную форму чека для отправки файлом в Telegram."""
     import asyncio
     import aiohttp
 
-    timeout = aiohttp.ClientTimeout(total=20)
+    timeout = aiohttp.ClientTimeout(total=30, sock_read=15)
     proxy_url = settings.get_nalogo_proxy_url()
     
     max_retries = 3
-    retry_delay = 1.0  # Задержка между попытками в секундах
+    retry_delay = 1.0
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -625,24 +621,34 @@ async def _download_receipt_file(receipt_url: str) -> tuple[bytes, str] | None:
                         logger.warning('Неожиданный формат печатной формы чека NaloGO', content_type=content_type)
                         return None
 
-                    if resp.content_length and resp.content_length > _RECEIPT_MAX_BYTES:
-                        logger.warning('Печатная форма чека NaloGO слишком велика', content_length=resp.content_length)
+                    expected_size = int(resp.headers.get('Content-Length', 0))
+                    if expected_size > _RECEIPT_MAX_BYTES:
+                        logger.warning('Печатная форма чека NaloGO слишком велика', content_length=expected_size)
                         return None
 
-                    data = await resp.content.read(_RECEIPT_MAX_BYTES + 1)
-                    if not data:
-                        return None
+                    # Читаем данные потоком в цикле, чтобы забрать весь файл целиком,
+                    # а не останавливаться на первом внутреннем буфере (10 КБ).
+                    chunks = []
+                    total_downloaded = 0
+                    
+                    async for chunk in resp.content.iter_chunked(65536): # Читаем чанками по 64 КБ
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        total_downloaded += len(chunk)
                         
-                    if len(data) > _RECEIPT_MAX_BYTES:
-                        logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
-                        return None
+                        if total_downloaded > _RECEIPT_MAX_BYTES:
+                            logger.warning('Печатная форма чека NaloGO превысила лимит при чтении')
+                            return None
 
-                    # Проверка целостности
-                    if resp.content_length and len(data) < resp.content_length:
+                    data = b''.join(chunks)
+
+                    # Проверяем целостность по Content-Length
+                    if expected_size > 0 and len(data) < expected_size:
                         logger.warning(
-                            'Чек скачался не полностью (обрезан потоком), пробуем снова...', 
+                            'Чек скачался не полностью (обрезан потоком)', 
                             attempt=attempt,
-                            expected=resp.content_length, 
+                            expected=expected_size, 
                             actual=len(data)
                         )
                         if attempt == max_retries:
