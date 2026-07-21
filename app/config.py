@@ -1471,9 +1471,9 @@ class Settings(BaseSettings):
     def get_nalogo_proxy_url(self) -> str | None:
         """Return SOCKS proxy URL for nalogo or None.
 
-        Uses NALOGO_PROXY_URL if set, otherwise falls back to PROXY_URL.
+        Uses NALOGO_PROXY_URL if set
         """
-        return self.NALOGO_PROXY_URL or self.PROXY_URL
+        return self.NALOGO_PROXY_URL if self.NALOGO_PROXY_URL else None
 
     def is_admin(self, telegram_id: int | None = None, email: str | None = None) -> bool:
         """
