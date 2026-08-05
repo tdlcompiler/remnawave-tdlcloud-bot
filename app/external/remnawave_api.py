@@ -651,6 +651,7 @@ class RemnaWaveAPI:
         return await self.enrich_user_with_happ_link(user)
 
     async def get_user_by_id(self, user_id: int) -> RemnaWaveUser | None:
+        panel_user_id = coerce_panel_user_id(user_id)
         try:
             response = await self._make_request('GET', f'/api/users/{panel_user_id}')
             user = self._parse_user(response['response'])
