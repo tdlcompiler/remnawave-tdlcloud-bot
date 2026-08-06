@@ -31,7 +31,7 @@ _HWID_CONFLICT_REPORT_CACHE: HwidConflictScanResult | None = None
 
 @dataclass(slots=True)
 class HwidConflictAccount:
-    remnawave_uuid: str
+    remnawave_id: int
     user_id: int | None = None
     telegram_id: int | None = None
     user_label: str = 'Неизвестный аккаунт'
@@ -97,25 +97,22 @@ class HwidConflictService:
                     conflicts=[],
                 )
 
-            user_ids = self._collect_user_ids(devices)
-            user_id_to_uuid = await self._load_user_uuid_map(api) if user_ids else {}
-
-        hwid_to_panel_uuids: dict[str, set[str]] = {}
-        unresolved_user_ids: set[int] = set()
+        hwid_to_panel_ids: dict[str, set[int]] = {}
+        unresolved_panel_ids: set[int] = set()
 
         for device in devices:
             hwid = self._extract_hwid(device)
             if not hwid:
                 continue
 
-            panel_uuid = self._resolve_panel_uuid_for_device(device, user_id_to_uuid, unresolved_user_ids)
-            if not panel_uuid:
+            panel_id = self._extract_panel_user_id(device)
+            if panel_id is None:
                 continue
 
-            hwid_to_panel_uuids.setdefault(hwid, set()).add(panel_uuid)
+            hwid_to_panel_ids.setdefault(hwid, set()).add(panel_id)
 
         duplicate_hwid_map = {
-            hwid: panel_uuids for hwid, panel_uuids in hwid_to_panel_uuids.items() if len(panel_uuids) > 1
+            hwid: panel_ids for hwid, panel_ids in hwid_to_panel_ids.items() if len(panel_ids) > 1
         }
 
         if not duplicate_hwid_map:
@@ -123,18 +120,18 @@ class HwidConflictService:
                 scanned_devices=len(devices),
                 duplicate_hwids=0,
                 unique_panel_users_in_conflicts=0,
-                unmatched_panel_users=len(unresolved_user_ids),
+                unmatched_panel_users=0,
                 conflicts=[],
             )
 
-        all_conflict_uuids = {panel_uuid for panel_uuids in duplicate_hwid_map.values() for panel_uuid in panel_uuids}
+        all_conflict_ids = {panel_id for panel_ids in duplicate_hwid_map.values() for panel_id in panel_ids}
 
         # Если сессия была "протухшей" или держала старую транзакцию слишком долго,
         # сначала сбрасываем её состояние и только потом идём в БД.
         await self._safe_db_rollback(db)
 
-        uuid_metadata = await self._load_uuid_metadata(db, all_conflict_uuids)
-        unresolved_uuids = all_conflict_uuids - set(uuid_metadata.keys())
+        panel_metadata = await self._load_panel_metadata(db, all_conflict_ids)
+        unresolved_ids = all_conflict_ids - set(panel_metadata.keys())
 
         conflicts: list[HwidConflict] = []
 
@@ -143,14 +140,14 @@ class HwidConflictService:
             key=lambda item: (-len(item[1]), item[0]),
         )
 
-        for hwid, panel_uuids in sorted_conflicts:
+        for hwid, panel_ids in sorted_conflicts:
             accounts: list[HwidConflictAccount] = []
-            for panel_uuid in sorted(panel_uuids):
-                account = uuid_metadata.get(panel_uuid)
+            for panel_id in sorted(panel_ids):
+                account = panel_metadata.get(panel_id)
                 if not account:
                     accounts.append(
                         HwidConflictAccount(
-                            remnawave_uuid=panel_uuid,
+                            remnawave_id=panel_id,
                             user_label='Аккаунт не найден в БД бота',
                         )
                     )
@@ -163,105 +160,81 @@ class HwidConflictService:
         return HwidConflictScanResult(
             scanned_devices=len(devices),
             duplicate_hwids=len(duplicate_hwid_map),
-            unique_panel_users_in_conflicts=len(all_conflict_uuids),
-            unmatched_panel_users=len(unresolved_uuids) + len(unresolved_user_ids),
+            unique_panel_users_in_conflicts=len(all_conflict_ids),
+            unmatched_panel_users=len(unresolved_ids) + len(unresolved_panel_ids),
             conflicts=conflicts,
         )
 
-    async def _load_user_uuid_map(self, api: Any) -> dict[int, str]:
-        """
-        Строит карту panel userId -> panel uuid без запросов по одному userId.
-
-        """
-        try:
-            users = await api.get_all_users_stream(size=500, enrich_happ_links=False)
-        except Exception as error:
-            logger.error('Не удалось загрузить список пользователей панели', error=error)
-            return {}
-
-        result: dict[int, str] = {}
-
-        for user in users:
-            user_id = getattr(user, 'id', None)
-            user_uuid = getattr(user, 'uuid', None)
-            if user_id is None or not user_uuid:
-                continue
-
-            try:
-                result[int(user_id)] = str(user_uuid)
-            except Exception:
-                continue
-
-        return result
-
-    async def _load_uuid_metadata(
+    async def _load_panel_metadata(
         self,
         db: AsyncSession,
-        panel_uuids: set[str],
-    ) -> dict[str, HwidConflictAccount]:
-        if not panel_uuids:
+        panel_ids: set[int],
+    ) -> dict[int, HwidConflictAccount]:
+        if not panel_ids:
             return {}
 
-        metadata: dict[str, HwidConflictAccount] = {}
-        panel_uuid_chunks = list(self._chunked(sorted(panel_uuids), chunk_size=250))
+        metadata: dict[int, HwidConflictAccount] = {}
+        panel_id_chunks = list(self._chunked(sorted(panel_ids), chunk_size=250))
 
-        for chunk in panel_uuid_chunks:
-            # Retry once on a stale/closed connection.
+        for chunk in panel_id_chunks:
             subscriptions = await self._execute_subscription_chunk_query(db, chunk)
 
-            grouped_subscriptions: dict[str, list[Subscription]] = {}
-            grouped_users: dict[str, User] = {}
+            grouped_subscriptions: dict[int, list[Subscription]] = {}
+            grouped_users: dict[int, User] = {}
 
             for subscription in subscriptions:
-                panel_uuid = self._extract_panel_uuid(subscription)
-                if not panel_uuid:
+                panel_id = self._extract_panel_id(subscription)
+                if panel_id is None:
                     continue
 
-                grouped_subscriptions.setdefault(panel_uuid, []).append(subscription)
+                grouped_subscriptions.setdefault(panel_id, []).append(subscription)
 
-                if subscription.user and panel_uuid not in grouped_users:
-                    grouped_users[panel_uuid] = subscription.user
+                if subscription.user and panel_id not in grouped_users:
+                    grouped_users[panel_id] = subscription.user
 
-            unresolved_uuids = set(chunk) - set(grouped_subscriptions.keys())
-            if unresolved_uuids:
-                users = await self._execute_user_chunk_query(db, unresolved_uuids)
+            unresolved_ids = set(chunk) - set(grouped_subscriptions.keys())
+            if unresolved_ids:
+                users = await self._execute_user_chunk_query(db, unresolved_ids)
 
                 for user in users:
-                    panel_uuid = (user.remnawave_uuid or '').strip()
-                    if not panel_uuid:
+                    panel_id = self._extract_user_panel_id(user)
+                    if panel_id is None:
                         continue
 
-                    grouped_subscriptions.setdefault(panel_uuid, []).extend(user.subscriptions or [])
-                    if panel_uuid not in grouped_users:
-                        grouped_users[panel_uuid] = user
+                    grouped_subscriptions.setdefault(panel_id, []).extend(user.subscriptions or [])
+                    if panel_id not in grouped_users:
+                        grouped_users[panel_id] = user
 
-            for panel_uuid, subscriptions_for_uuid in grouped_subscriptions.items():
-                if not subscriptions_for_uuid:
+            for panel_id, subscriptions_for_id in grouped_subscriptions.items():
+                if not subscriptions_for_id:
                     continue
 
-                user = grouped_users.get(panel_uuid) or next((sub.user for sub in subscriptions_for_uuid if sub.user), None)
-                best_subscription = self._pick_best_subscription(subscriptions_for_uuid)
-                subscription_statuses = tuple(sorted({sub.status for sub in subscriptions_for_uuid if sub.status}))
+                user = grouped_users.get(panel_id) or next(
+                    (sub.user for sub in subscriptions_for_id if sub.user),
+                    None,
+                )
+                best_subscription = self._pick_best_subscription(subscriptions_for_id)
+                subscription_statuses = tuple(sorted({sub.status for sub in subscriptions_for_id if sub.status}))
                 active_paid_count = sum(
                     1
-                    for sub in subscriptions_for_uuid
+                    for sub in subscriptions_for_id
                     if sub.status == SubscriptionStatus.ACTIVE.value and not bool(getattr(sub, 'is_trial', False))
                 )
                 active_trial_count = sum(
                     1
-                    for sub in subscriptions_for_uuid
+                    for sub in subscriptions_for_id
                     if sub.status == SubscriptionStatus.ACTIVE.value and bool(getattr(sub, 'is_trial', False))
                 )
 
                 account = HwidConflictAccount(
-                    remnawave_uuid=panel_uuid,
+                    remnawave_id=panel_id,
                     user_id=user.id if user else None,
                     telegram_id=user.telegram_id if user else None,
                     user_label=self._build_user_label(user) if user else 'Аккаунт не найден в БД бота',
                     subscription_id=best_subscription.id if best_subscription else None,
                     subscription_status=best_subscription.status if best_subscription else None,
                     subscription_statuses=subscription_statuses,
-                    subscription_count=len(subscriptions_for_uuid),
+                    subscription_count=len(subscriptions_for_id),
                     active_paid_count=active_paid_count,
                     active_trial_count=active_trial_count,
                     tariff_name=best_subscription.tariff.name if best_subscription and best_subscription.tariff else None,
@@ -270,8 +243,8 @@ class HwidConflictService:
 
         return metadata
 
-    async def _execute_subscription_chunk_query(self, db: AsyncSession, panel_uuids: list[str]) -> list[Subscription]:
-        if not panel_uuids:
+    async def _execute_subscription_chunk_query(self, db: AsyncSession, panel_ids: list[int]) -> list[Subscription]:
+        if not panel_ids:
             return []
 
         statement = (
@@ -280,8 +253,8 @@ class HwidConflictService:
             .join(Subscription.user, isouter=True)
             .where(
                 or_(
-                    Subscription.remnawave_uuid.in_(panel_uuids),
-                    User.remnawave_uuid.in_(panel_uuids),
+                    Subscription.remnawave_id.in_(panel_ids),
+                    User.remnawave_id.in_(panel_ids),
                 ),
             )
         )
@@ -289,14 +262,14 @@ class HwidConflictService:
         result = await self._execute_with_retry(db, statement, stage='subscriptions')
         return result.scalars().unique().all()
 
-    async def _execute_user_chunk_query(self, db: AsyncSession, panel_uuids: set[str]) -> list[User]:
-        if not panel_uuids:
+    async def _execute_user_chunk_query(self, db: AsyncSession, panel_ids: set[int]) -> list[User]:
+        if not panel_ids:
             return []
 
         statement = (
             select(User)
             .options(selectinload(User.subscriptions).selectinload(Subscription.tariff))
-            .where(User.remnawave_uuid.in_(list(panel_uuids)))
+            .where(User.remnawave_id.in_(list(panel_ids)))
         )
 
         result = await self._execute_with_retry(db, statement, stage='users')
@@ -319,44 +292,25 @@ class HwidConflictService:
         except Exception as error:
             logger.debug('Не удалось выполнить rollback сессии', error=error)
 
-    def _resolve_panel_uuid_for_device(
-        self,
-        device: dict[str, Any],
-        user_id_to_uuid: dict[int, str],
-        unresolved_user_ids: set[int],
-    ) -> str:
-        """
-        Возвращает UUID панели для HWID-девайса.
+    def _extract_panel_id(self, subscription: Subscription) -> int | None:
+        panel_id = self._normalize_int(getattr(subscription, 'remnawave_id', None))
+        if panel_id is not None:
+            return panel_id
+        if subscription.user:
+            return self._normalize_int(getattr(subscription.user, 'remnawave_id', None))
+        return None
 
-        Приоритет:
-        1) userId -> uuid через карту
-        2) старые поля userUuid/userUUID/user_uuid, если они ещё приходят
-        """
-        user_id = self._extract_panel_user_id(device)
-        if user_id is not None:
-            panel_uuid = user_id_to_uuid.get(user_id)
-            if panel_uuid:
-                return panel_uuid
-            unresolved_user_ids.add(user_id)
-
-        return self._extract_panel_user_uuid(device)
-
-    def _collect_user_ids(self, devices: list[dict[str, Any]]) -> set[int]:
-        user_ids: set[int] = set()
-        for device in devices:
-            user_id = self._extract_panel_user_id(device)
-            if user_id is not None:
-                user_ids.add(user_id)
-        return user_ids
+    def _extract_user_panel_id(self, user: User) -> int | None:
+        return self._normalize_int(getattr(user, 'remnawave_id', None))
 
     def _upsert_best_account(
         self,
-        metadata: dict[str, HwidConflictAccount],
+        metadata: dict[int, HwidConflictAccount],
         candidate: HwidConflictAccount,
     ) -> None:
-        existing = metadata.get(candidate.remnawave_uuid)
+        existing = metadata.get(candidate.remnawave_id)
         if not existing or self._account_priority(candidate) > self._account_priority(existing):
-            metadata[candidate.remnawave_uuid] = candidate
+            metadata[candidate.remnawave_id] = candidate
 
     def _account_priority(self, account: HwidConflictAccount) -> tuple[int, int, int, int, int, int]:
         return (
@@ -408,21 +362,6 @@ class HwidConflictService:
                 return user_id
         return None
 
-    def _extract_panel_user_uuid(self, device: dict[str, Any]) -> str:
-        for key in ('userUuid', 'userUUID', 'user_uuid'):
-            value = self._normalize_str(device.get(key))
-            if value:
-                return value
-        return ''
-
-    def _extract_panel_uuid(self, subscription: Subscription) -> str:
-        panel_uuid = self._normalize_str(subscription.remnawave_uuid)
-        if panel_uuid:
-            return panel_uuid
-        if subscription.user:
-            return self._normalize_str(subscription.user.remnawave_uuid)
-        return ''
-
     def _normalize_str(self, value: Any) -> str:
         if value is None:
             return ''
@@ -458,6 +397,6 @@ class HwidConflictService:
         except Exception:
             return 0.0
 
-    def _chunked(self, values: list[str], chunk_size: int = 250):
+    def _chunked(self, values: list[int], chunk_size: int = 250):
         for start in range(0, len(values), chunk_size):
             yield values[start : start + chunk_size]
