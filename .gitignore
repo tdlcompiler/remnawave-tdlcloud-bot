@@ -47,6 +47,8 @@
 !assets/
 !assets/**
 !locales/
+!torrent_script/
+!ssl/
 !locales/**
 !.github/
 !.github/**
