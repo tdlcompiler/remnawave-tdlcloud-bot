@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     ADMIN_NOTIFICATIONS_PROMO_ENABLED: bool = True
     ADMIN_NOTIFICATIONS_PARTNERS_ENABLED: bool = True
     ADMIN_NOTIFICATIONS_TICKETS_ENABLED: bool = True
+    
+    EDGE_FIREWALL_ENABLED: bool = False
+    EDGE_FIREWALL_HOST: str = ""
+    EDGE_FIREWALL_PORT: int = 2053
+    EDGE_FIREWALL_TOKEN: str = ""
+    EDGE_FIREWALL_CA_FILE: str | None = None
 
     # Настройки очереди чеков NaloGO
     NALOGO_QUEUE_CHECK_INTERVAL: int = 600  # Интервал проверки очереди (секунды, 10 мин)
