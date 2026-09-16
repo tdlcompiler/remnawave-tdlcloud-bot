@@ -2263,6 +2263,13 @@ class User(Base):
     balance_kopeks = Column(Integer, default=0)
     used_promocodes = Column(Integer, default=0)
     has_had_paid_subscription = Column(Boolean, default=False, nullable=False)
+    # Когда админ последний раз открыл человеку триал заново (кнопка «Сбросить триал»).
+    #
+    # Саму отметку «когда-то платил» сброс не снимает: по ней считаются конверсия,
+    # выручка и выборки кампаний — она про факт, а не про право на триал. Эта дата
+    # перекрывает её ровно до того момента, пока у человека снова не появится
+    # подписка: взял новый триал — и он снова закрыт обычным правилом.
+    trial_reset_at = Column(AwareDateTime(), nullable=True)
     referred_by_id = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
     referral_code = Column(String(20), unique=True, nullable=True)
     created_at = Column(AwareDateTime(), default=func.now())
@@ -2334,8 +2341,12 @@ class User(Base):
         ЛИБО у него есть ЛЮБАЯ подписка — кроме PENDING-триала (это повторная попытка
         оплаты того же триала). Проверяются ВСЕ подписки (multi-tariff-safe). Требует
         загруженного `subscriptions`.
+
+        Исключение — админский сброс (`trial_reset_at`): он открывает триал заново
+        тому, кто когда-то платил, и «сгорает» сам, как только у человека снова
+        появляется подписка.
         """
-        if self.has_had_paid_subscription:
+        if self.has_had_paid_subscription and self.trial_reset_at is None:
             return True
         return any(not sub.is_pending_trial for sub in (self.subscriptions or []))
 
@@ -2546,6 +2557,17 @@ class Subscription(Base):
     # истёкшая подписка «истекала» заново в конец грейса, воркер видел свежее
     # истечение и выдавал грейс снова (проверено на стенде 2026-09-14).
     grace_tail_expire_at = Column(AwareDateTime(), nullable=True)
+    # Грейс-сессия открыта (pending/active/restoring): в панели стоит оверлей
+    # грейса — его дата, статус, сквад и лимит. Импорт «панель — истина» эти поля
+    # в бота не переносит, мониторинг не принимает ACTIVE панели за продление.
+    # Ведёт хранилище грейс-сессий в той же транзакции, что и состояние сессии,
+    # поэтому защищён любой путь импорта, а не только помнящий про ``grace_open``.
+    grace_session_open = Column(Boolean, nullable=False, default=False, server_default=text('false'))
+    # Дата оверлея последней грейс-сессии — «конец грейса», выставленный в панели.
+    # Пишется вместе с сессией до отправки оверлея и при закрытии не стирается:
+    # снимок панели с этой датой — всегда оверлей, а не продление, даже если его
+    # обрабатывают уже после досрочного закрытия грейса (признак выше тогда снят).
+    grace_overlay_expire_at = Column(AwareDateTime(), nullable=True)
 
     remnawave_short_uuid = Column(String(255), nullable=True)
     # Панельный идентификатор пользователя. С Remnawave 3.0.0 это числовой id —
