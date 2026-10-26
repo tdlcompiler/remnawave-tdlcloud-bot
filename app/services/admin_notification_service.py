@@ -137,7 +137,7 @@ class AdminNotificationService:
             NotificationCategory.PARTNERS: getattr(settings, 'ADMIN_NOTIFICATIONS_PARTNERS_TOPIC_ID', None),
             NotificationCategory.TICKETS: self.ticket_topic_id,
         }
-        
+
         # Per-category enabled flags (default True — backwards compatible)
         self.category_enabled: dict[NotificationCategory, bool] = {}
         for cat in NotificationCategory:
@@ -2397,6 +2397,7 @@ class AdminNotificationService:
                     f'⏰ <i>{format_local_datetime(datetime.now(UTC), "%d.%m.%Y %H:%M:%S")}</i>',
                 ]
             )
+
             reply_markup = None
             if request_id is not None:
                 from app.keyboards.withdrawal import get_withdrawal_request_keyboard
@@ -2414,17 +2415,6 @@ class AdminNotificationService:
 
         except Exception as e:
             logger.error('Ошибка отправки уведомления о запросе на вывод', error=e)
-            return False
-            
-    async def _send_text_with_retry(
-        self,
-        text: str,
-        reply_markup: types.InlineKeyboardMarkup | None = None,
-        category: NotificationCategory | None = None,
-    ) -> bool:
-        """Отправляет текстовое сообщение с повторной попыткой при ошибке приватности."""
-        if not self.chat_id:
-            logger.warning('ADMIN_NOTIFICATIONS_CHAT_ID не настроен')
             return False
 
     async def send_withdrawal_pending_reminder(self, request: WithdrawalRequest, waited_minutes: int) -> bool:
@@ -2581,23 +2571,7 @@ class AdminNotificationService:
 
         thread_id = self._resolve_topic_id(category=NotificationCategory.TICKETS)
         sender = self.bot.send_video if media_type == 'video' else self.bot.send_photo
-        # Если текст помещается в caption, отправляем фото с caption и клавиатурой
-        if not caption_exceeds_telegram_limit(text):
-            return await self._send_photo_with_retry(
-                photo_file_id,
-                caption=text,
-                reply_markup=keyboard,
-                category=NotificationCategory.TICKETS,
-            )
-        else:
-            # Текст отдельно (с клавиатурой или без), фото отдельно
-            text_sent = await self._send_text_with_retry(text, keyboard, category=NotificationCategory.TICKETS)
-            photo_sent = await self._send_photo_with_retry(photo_file_id, category=NotificationCategory.TICKETS)
-            return text_sent and photo_sent
 
-    def _is_enabled(self) -> bool:
-        """Проверяет, включены ли уведомления."""
-        return self.enabled and bool(self.chat_id)
         try:
             if not caption_exceeds_telegram_limit(text):
                 # Медиа с caption — всё в одном сообщении
