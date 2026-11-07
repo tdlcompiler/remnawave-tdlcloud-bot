@@ -262,6 +262,7 @@ def _user_to_response(user: User) -> UserResponse:
         first_name=user.first_name,
         last_name=user.last_name,
         email=user.email,
+        receipt_email=user.receipt_email or user.email,
         email_verified=user.email_verified,
         balance_kopeks=user.balance_kopeks,
         balance_rubles=user.balance_rubles,

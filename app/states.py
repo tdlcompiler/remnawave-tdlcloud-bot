@@ -48,6 +48,8 @@ class GiftActivationStates(StatesGroup):
 
 
 class BalanceStates(StatesGroup):
+    waiting_for_yookassa_receipt_email = State()
+    waiting_for_yookassa_receipt_confirmation = State()
     waiting_for_antilopay_email = State()
     waiting_for_amount = State()
     waiting_for_pal24_method = State()

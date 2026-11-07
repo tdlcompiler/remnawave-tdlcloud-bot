@@ -149,6 +149,7 @@ class UserResponse(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     email: str | None = None
+    receipt_email: str | None = None
     email_verified: bool = False
     balance_kopeks: int = 0
     balance_rubles: float = 0.0

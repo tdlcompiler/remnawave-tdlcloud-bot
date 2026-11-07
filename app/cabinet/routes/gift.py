@@ -305,6 +305,16 @@ async def create_gift_purchase(
                 detail='User not found',
             )
 
+        receipt_email = None
+        if body.payment_method in ('yookassa', 'yookassa_card', 'yookassa_sbp'):
+            from app.services.receipt_email import user_receipt_email, validate_receipt_email
+
+            receipt_email = validate_receipt_email(body.receipt_email) if body.receipt_email is not None else user_receipt_email(locked_user)
+            if not receipt_email:
+                raise HTTPException(status_code=400, detail='A valid receipt email is required')
+            if body.receipt_email is not None and receipt_email != user_receipt_email(locked_user):
+                locked_user.receipt_email = receipt_email
+
         try:
             quote = await quote_gift_purchase(
                 db=db,
@@ -365,6 +375,7 @@ async def create_gift_purchase(
                 is_gift=True,
                 source='cabinet',
                 buyer_user_id=locked_user.id,
+                receipt_email=receipt_email,
                 commit=False,
                 **purchase_kwargs,
             )
@@ -404,6 +415,7 @@ async def create_gift_purchase(
                 description=f'Gift: {quote.tariff_name} ({body.period_days}d)',
                 purchase_token=purchase.token,
                 return_url=return_url,
+                receipt_email=receipt_email,
             )
         except Exception:
             await db.rollback()

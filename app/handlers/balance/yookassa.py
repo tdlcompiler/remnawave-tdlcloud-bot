@@ -23,6 +23,101 @@ from app.utils.topup_retry import format_topup_amount_retry
 logger = structlog.get_logger(__name__)
 
 
+async def prompt_receipt_email(message, db_user, state, amount_kopeks, method):
+    from app.services.receipt_email import user_receipt_email
+
+    email = user_receipt_email(db_user)
+    await state.update_data(receipt_amount=amount_kopeks, receipt_method=method, receipt_checkout_callback=None, receipt_confirmed=False)
+    await state.set_state(BalanceStates.waiting_for_yookassa_receipt_confirmation)
+    if email:
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text='Продолжить', callback_data='yk_receipt_continue')],
+            [types.InlineKeyboardButton(text='Изменить email', callback_data='yk_receipt_change')],
+            [types.InlineKeyboardButton(text='Отмена', callback_data='balance_topup')],
+        ])
+        await message.answer(f'Email для чека: <b>{html.escape(email)}</b>', reply_markup=keyboard, parse_mode='HTML')
+    else:
+        await state.set_state(BalanceStates.waiting_for_yookassa_receipt_email)
+        await message.answer('Введите email, на который отправить чек:')
+
+
+async def confirm_checkout_receipt(callback, db_user, state):
+    """Pause callback checkout without losing its original FSM data."""
+    from app.services.receipt_email import user_receipt_email
+
+    data = await state.get_data()
+    if data.get('receipt_resume') == callback.data:
+        await state.update_data(receipt_resume=None, receipt_checkout_callback=None)
+        await state.set_state(data.get('receipt_previous_state'))
+        return True
+    email = user_receipt_email(db_user)
+    await state.update_data(
+        receipt_checkout_callback=callback.data,
+        receipt_previous_state=await state.get_state(),
+        receipt_resume=callback.data if email else None,
+        receipt_amount=None,
+    )
+    await state.set_state(BalanceStates.waiting_for_yookassa_receipt_confirmation)
+    if email:
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text='Продолжить', callback_data=callback.data)],
+            [types.InlineKeyboardButton(text='Изменить email', callback_data='yk_receipt_change')],
+        ])
+        await callback.message.answer(f'Email для чека: <b>{html.escape(email)}</b>', reply_markup=keyboard, parse_mode='HTML')
+    else:
+        await state.set_state(BalanceStates.waiting_for_yookassa_receipt_email)
+        await callback.message.answer('Введите email, на который отправить чек:')
+    await callback.answer()
+    return False
+
+
+async def change_receipt_email(callback: types.CallbackQuery, state: FSMContext):
+    await state.set_state(BalanceStates.waiting_for_yookassa_receipt_email)
+    await callback.message.answer('Введите email, на который отправить чек:')
+    await callback.answer()
+
+
+async def save_receipt_email(message: types.Message, db_user: User, db: AsyncSession, state: FSMContext):
+    from app.services.receipt_email import validate_receipt_email
+
+    email = validate_receipt_email(message.text)
+    if not email:
+        await message.answer('Введите корректный email для чека:')
+        return
+    await db.execute(update(User).where(User.id == db_user.id).values(receipt_email=email))
+    await db.commit()
+    db_user.receipt_email = email
+    data = await state.get_data()
+    checkout_callback = data.get('receipt_checkout_callback')
+    if checkout_callback:
+        await state.update_data(receipt_resume=checkout_callback, receipt_checkout_callback=None)
+        await state.set_state(data.get('receipt_previous_state'))
+        keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text='Продолжить оплату', callback_data=checkout_callback)],
+        ])
+        await message.answer('Email для чека сохранён.', reply_markup=keyboard)
+        return
+    await continue_receipt_payment(message, db_user, db, state)
+
+
+async def continue_receipt_payment(message, db_user, db, state):
+    data = await state.get_data()
+    amount = data.get('receipt_amount')
+    method = data.get('receipt_method')
+    if not amount or method not in ('yookassa', 'yookassa_sbp'):
+        await state.clear()
+        await message.answer('Платёж отменён. Начните оплату заново.')
+        return
+    await state.update_data(receipt_confirmed=True)
+    handler = process_yookassa_sbp_payment_amount if method == 'yookassa_sbp' else process_yookassa_payment_amount
+    await handler(message, db_user, db, amount, state)
+
+
+async def confirm_receipt_email(callback: types.CallbackQuery, db_user: User, db: AsyncSession, state: FSMContext):
+    await callback.answer()
+    await continue_receipt_payment(callback.message, db_user, db, state)
+
+
 @error_handler
 async def start_yookassa_payment(callback: types.CallbackQuery, db_user: User, state: FSMContext):
     texts = get_texts(db_user.language)
@@ -147,6 +242,10 @@ async def process_yookassa_payment_amount(
     message: types.Message, db_user: User, db: AsyncSession, amount_kopeks: int, state: FSMContext
 ):
     texts = get_texts(db_user.language)
+
+    if not (await state.get_data()).get('receipt_confirmed'):
+        await prompt_receipt_email(message, db_user, state, amount_kopeks, 'yookassa')
+        return
 
     # Проверка ограничения на пополнение
     if getattr(db_user, 'restriction_topup', False):
@@ -334,6 +433,10 @@ async def process_yookassa_sbp_payment_amount(
     message: types.Message, db_user: User, db: AsyncSession, amount_kopeks: int, state: FSMContext
 ):
     texts = get_texts(db_user.language)
+
+    if not (await state.get_data()).get('receipt_confirmed'):
+        await prompt_receipt_email(message, db_user, state, amount_kopeks, 'yookassa_sbp')
+        return
 
     # Проверка ограничения на пополнение
     if getattr(db_user, 'restriction_topup', False):

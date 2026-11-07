@@ -177,6 +177,7 @@ class PurchaseRequest(BaseModel):
     contact_type: str = Field(pattern=r'^(email|telegram)$')
     contact_value: str = Field(min_length=1, max_length=255)
     payment_method: str = Field(min_length=1, max_length=50, pattern=r'^[a-z0-9_]+$')
+    receipt_email: str | None = Field(default=None, max_length=255)
     is_gift: bool = False
     gift_recipient_type: str | None = Field(default=None, pattern=r'^(email|telegram)$')
     gift_recipient_value: str | None = Field(default=None, max_length=255)
@@ -190,6 +191,12 @@ class PurchaseRequest(BaseModel):
     @model_validator(mode='after')
     def validate_contacts(self) -> 'PurchaseRequest':
         _validate_contact(self.contact_type, self.contact_value)
+        if self.payment_method in ('yookassa', 'yookassa_card', 'yookassa_sbp'):
+            from app.services.receipt_email import validate_receipt_email
+
+            self.receipt_email = validate_receipt_email(self.receipt_email or (self.contact_value if self.contact_type == 'email' else None))
+            if not self.receipt_email:
+                raise ValueError('Укажите корректный email для чека')
         if (
             self.payment_method == 'platega' or self.payment_method.startswith('platega_')
         ) and self.contact_type != 'email':
@@ -922,6 +929,7 @@ async def create_landing_purchase(
         contact_type=body.contact_type,
         contact_value=body.contact_value,
         payment_method=body.payment_method,
+        receipt_email=body.receipt_email,
         is_gift=body.is_gift,
         gift_recipient_type=body.gift_recipient_type,
         gift_recipient_value=body.gift_recipient_value,
@@ -956,6 +964,7 @@ async def create_landing_purchase(
         description=f'{tariff.name} — {body.period_days}d',
         purchase_token=purchase.token,
         return_url=return_url,
+        receipt_email=purchase.receipt_email,
     )
 
     if payment_result is None:

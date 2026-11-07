@@ -355,6 +355,16 @@ async def create_topup(
     cabinet_success_url = f'{cabinet_return_url}&status=success'
     cabinet_failed_url = f'{cabinet_return_url}&status=failed'
 
+    if request.payment_method == 'yookassa':
+        from app.services.receipt_email import user_receipt_email, validate_receipt_email
+
+        receipt_email = validate_receipt_email(str(request.customer_email)) if request.customer_email else user_receipt_email(user)
+        if not receipt_email:
+            raise HTTPException(status_code=400, detail='A valid receipt email is required')
+        if request.customer_email and receipt_email != user_receipt_email(user):
+            user.receipt_email = receipt_email
+            await db.commit()
+
     try:
         if request.payment_method == 'yookassa':
             payment_service = PaymentService()

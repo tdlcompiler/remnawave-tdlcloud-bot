@@ -196,21 +196,13 @@ class YooKassaService:
             logger.error('YooKassa не сконфигурирован. Невозможно создать платеж.')
             return None
 
-        customer_contact_for_receipt = {}
-        if receipt_email:
-            customer_contact_for_receipt['email'] = receipt_email
-        elif receipt_phone:
-            customer_contact_for_receipt['phone'] = receipt_phone
-        elif hasattr(settings, 'YOOKASSA_DEFAULT_RECEIPT_EMAIL') and settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL:
-            customer_contact_for_receipt['email'] = settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL
-        else:
-            logger.error(
-                'КРИТИЧНО: Не предоставлен email/телефон для чека YooKassa и YOOKASSA_DEFAULT_RECEIPT_EMAIL не установлен.'
-            )
-            return {
-                'error': True,
-                'internal_message': 'Отсутствуют контактные данные для чека YooKassa и не настроен email по умолчанию.',
-            }
+        from app.services.receipt_email import validate_receipt_email
+
+        receipt_email = validate_receipt_email(receipt_email)
+        if not receipt_email:
+            logger.warning('YooKassa payment requires a valid receipt email')
+            return None
+        customer_contact_for_receipt = {'email': receipt_email}
 
         try:
             builder = PaymentRequestBuilder()
@@ -300,21 +292,13 @@ class YooKassaService:
             logger.error('YooKassa не сконфигурирован. Невозможно создать платеж через СБП.')
             return None
 
-        customer_contact_for_receipt = {}
-        if receipt_email:
-            customer_contact_for_receipt['email'] = receipt_email
-        elif receipt_phone:
-            customer_contact_for_receipt['phone'] = receipt_phone
-        elif hasattr(settings, 'YOOKASSA_DEFAULT_RECEIPT_EMAIL') and settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL:
-            customer_contact_for_receipt['email'] = settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL
-        else:
-            logger.error(
-                'КРИТИЧНО: Не предоставлен email/телефон для чека YooKassa и YOOKASSA_DEFAULT_RECEIPT_EMAIL не установлен.'
-            )
-            return {
-                'error': True,
-                'internal_message': 'Отсутствуют контактные данные для чека YooKassa и не настроен email по умолчанию.',
-            }
+        from app.services.receipt_email import validate_receipt_email
+
+        receipt_email = validate_receipt_email(receipt_email)
+        if not receipt_email:
+            logger.warning('YooKassa payment requires a valid receipt email')
+            return None
+        customer_contact_for_receipt = {'email': receipt_email}
 
         try:
             # Создаем один платеж с подтверждением через QR
@@ -492,18 +476,13 @@ class YooKassaService:
             logger.error('YooKassa не сконфигурирован. Невозможно создать автоплатёж.')
             return None
 
-        customer_contact_for_receipt = {}
-        if receipt_email:
-            customer_contact_for_receipt['email'] = receipt_email
-        elif receipt_phone:
-            customer_contact_for_receipt['phone'] = receipt_phone
-        elif hasattr(settings, 'YOOKASSA_DEFAULT_RECEIPT_EMAIL') and settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL:
-            customer_contact_for_receipt['email'] = settings.YOOKASSA_DEFAULT_RECEIPT_EMAIL
-        else:
-            logger.error(
-                'КРИТИЧНО: Не предоставлен email/телефон для чека автоплатежа и YOOKASSA_DEFAULT_RECEIPT_EMAIL не установлен.'
-            )
+        from app.services.receipt_email import validate_receipt_email
+
+        receipt_email = validate_receipt_email(receipt_email)
+        if not receipt_email:
+            logger.warning('YooKassa payment requires a valid receipt email')
             return None
+        customer_contact_for_receipt = {'email': receipt_email}
 
         try:
             builder = PaymentRequestBuilder()

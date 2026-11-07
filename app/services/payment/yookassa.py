@@ -109,6 +109,16 @@ class YooKassaPaymentMixin:
         payment_module = import_module('app.services.payment_service')
 
         try:
+            from app.services.receipt_email import user_receipt_email, validate_receipt_email
+            from app.database.crud.user import get_user_by_id
+
+            if user_id is not None:
+                receipt_user = await get_user_by_id(db, user_id)
+                receipt_email = user_receipt_email(receipt_user) if receipt_user else None
+            receipt_email = validate_receipt_email(receipt_email)
+            if not receipt_email:
+                logger.warning('YooKassa payment requires a receipt email', user_id=user_id)
+                return None
             amount_rubles = amount_kopeks / 100
 
             payment_metadata = metadata.copy() if metadata else {}
@@ -213,6 +223,16 @@ class YooKassaPaymentMixin:
         payment_module = import_module('app.services.payment_service')
 
         try:
+            from app.services.receipt_email import user_receipt_email, validate_receipt_email
+            from app.database.crud.user import get_user_by_id
+
+            if user_id is not None:
+                receipt_user = await get_user_by_id(db, user_id)
+                receipt_email = user_receipt_email(receipt_user) if receipt_user else None
+            receipt_email = validate_receipt_email(receipt_email)
+            if not receipt_email:
+                logger.warning('YooKassa payment requires a receipt email', user_id=user_id)
+                return None
             amount_rubles = amount_kopeks / 100
 
             payment_metadata = metadata.copy() if metadata else {}

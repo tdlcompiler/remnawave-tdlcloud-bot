@@ -3966,7 +3966,7 @@ def _build_trial_success_keyboard(texts, subscription_link: str, connect_mode: s
 
 
 @error_handler
-async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: User, db: AsyncSession):
+async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: User, db: AsyncSession, state: FSMContext):
     """Обрабатывает выбор метода оплаты для платного триала."""
     from app.services.payment_service import PaymentService
     from app.services.trial_activation_service import get_trial_activation_charge_amount
@@ -3992,6 +3992,12 @@ async def handle_trial_payment_method(callback: types.CallbackQuery, db_user: Us
 
     # Определяем метод оплаты
     payment_method = callback.data.replace('trial_payment_', '')
+
+    if payment_method in ('yookassa', 'yookassa_sbp'):
+        from app.handlers.balance.yookassa import confirm_checkout_receipt
+
+        if not await confirm_checkout_receipt(callback, db_user, state):
+            return
 
     try:
         payment_service = PaymentService(callback.bot)

@@ -894,6 +894,7 @@ class PaymentService(
         description: str,
         purchase_token: str,
         return_url: str,
+        receipt_email: str | None = None,
     ) -> dict[str, Any] | None:
         """Create a payment for a guest (unauthenticated) landing-page purchase.
 
@@ -957,6 +958,7 @@ class PaymentService(
                     user_id=None,
                     amount_kopeks=amount_kopeks,
                     description=description,
+                    receipt_email=receipt_email,
                     metadata=guest_metadata,
                     return_url=return_url,
                 )
@@ -966,6 +968,7 @@ class PaymentService(
                     user_id=None,
                     amount_kopeks=amount_kopeks,
                     description=description,
+                    receipt_email=receipt_email,
                     metadata=guest_metadata,
                     return_url=return_url,
                 )

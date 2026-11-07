@@ -252,6 +252,7 @@ async def create_purchase(
     buyer_user_id: int | None = None,
     commit: bool = True,
     idempotency_key: str | None = None,
+    receipt_email: str | None = None,
 ) -> GuestPurchase:
     """Create a guest purchase record."""
     purchase = await create_guest_purchase(
@@ -274,6 +275,7 @@ async def create_purchase(
         source=source,
         buyer_user_id=buyer_user_id,
         idempotency_key=idempotency_key,
+        receipt_email=receipt_email,
         status=GuestPurchaseStatus.PENDING.value,
     )
 
@@ -479,6 +481,9 @@ async def fulfill_purchase(
             pre_resolved_telegram_id=pre_resolved_telegram_id,
             tariff_id=purchase.tariff_id,
         )
+        # An unauthenticated purchase must not overwrite an existing account's preference.
+        if is_new_account and purchase.receipt_email:
+            user.receipt_email = purchase.receipt_email
 
         # Load tariff early — needed for both PENDING_ACTIVATION and DELIVERED paths
         tariff = await get_tariff_by_id(db, purchase.tariff_id)

@@ -322,6 +322,20 @@ async def _process_single_subscription(
     }
 
     # Перебираем все сохранённые карты пока не найдём рабочую
+    from app.services.receipt_email import user_receipt_email
+
+    receipt_email = user_receipt_email(user)
+    if not receipt_email:
+        logger.warning('Skipping YooKassa autopayment: receipt email missing', user_id=user.id)
+        if bot and user.telegram_id and settings.is_notifications_enabled():
+            try:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text='Автоплатёж не выполнен: укажите email для чека при оплате в боте или кабинете.',
+                )
+            except Exception as error:
+                logger.warning('Could not notify user about missing receipt email', error=error)
+        return 'skipped'
     today = datetime.now(UTC).strftime('%Y-%m-%d')
     for saved_method in saved_methods:
         # Детерминированный ключ: при рестарте/повторе YooKassa вернёт тот же платёж
@@ -331,6 +345,7 @@ async def _process_single_subscription(
             currency='RUB',
             description=description,
             payment_method_id=saved_method.yookassa_payment_method_id,
+            receipt_email=receipt_email,
             metadata=metadata,
             idempotence_key=idem_key,
         )

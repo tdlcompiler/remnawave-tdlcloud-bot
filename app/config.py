@@ -684,6 +684,7 @@ class Settings(BaseSettings):
     YOOKASSA_SHOP_ID: str | None = None
     YOOKASSA_SECRET_KEY: str | None = None
     YOOKASSA_RETURN_URL: str | None = None
+    # Legacy setting retained for configuration compatibility; never used for receipts.
     YOOKASSA_DEFAULT_RECEIPT_EMAIL: str | None = None
     YOOKASSA_VAT_CODE: int = 1
     YOOKASSA_SBP_ENABLED: bool = False

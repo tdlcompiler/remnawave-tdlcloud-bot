@@ -784,6 +784,11 @@ async def handle_topup_amount_callback(
 
 
 def register_balance_handlers(dp: Dispatcher):
+    from .yookassa import change_receipt_email, confirm_receipt_email, save_receipt_email
+
+    dp.callback_query.register(change_receipt_email, BalanceStates.waiting_for_yookassa_receipt_confirmation, F.data == 'yk_receipt_change')
+    dp.callback_query.register(confirm_receipt_email, BalanceStates.waiting_for_yookassa_receipt_confirmation, F.data == 'yk_receipt_continue')
+    dp.message.register(save_receipt_email, BalanceStates.waiting_for_yookassa_receipt_email)
     dp.callback_query.register(show_balance_menu, F.data == 'menu_balance')
 
     dp.callback_query.register(show_balance_history, F.data == 'balance_history')

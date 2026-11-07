@@ -2476,6 +2476,7 @@ class User(Base):
 
     # Cabinet authentication fields
     email = Column(String(255), unique=True, nullable=True, index=True)
+    receipt_email = Column(String(255), nullable=True)
     email_verified = Column(Boolean, default=False, nullable=False)
     email_verified_at = Column(AwareDateTime(), nullable=True)
     # Источник верификации email — используется как trust signal для admin escalation.
@@ -5177,6 +5178,7 @@ class GuestPurchase(Base):
     """Guest (unauthenticated) purchase record."""
 
     __tablename__ = 'guest_purchases'
+    receipt_email = Column(String(255), nullable=True)
     __table_args__ = (
         Index('ix_guest_purchases_status', 'status'),
         Index('ix_guest_purchases_contact', 'contact_type', 'contact_value'),

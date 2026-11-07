@@ -63,6 +63,7 @@ class GiftPurchaseRequest(BaseModel):
     gift_message: str | None = Field(default=None, max_length=1000)
     payment_mode: str = Field(pattern=r'^(balance|gateway)$')
     payment_method: str | None = Field(default=None, max_length=50)
+    receipt_email: str | None = Field(default=None, max_length=255)
 
     @model_validator(mode='after')
     def validate_payment(self) -> GiftPurchaseRequest:

@@ -1032,6 +1032,12 @@ async def handle_simple_subscription_payment_method(
 
     payment_method = callback.data.replace('simple_subscription_', '')
 
+    if payment_method in ('yookassa', 'yookassa_sbp'):
+        from app.handlers.balance.yookassa import confirm_checkout_receipt
+
+        if not await confirm_checkout_receipt(callback, db_user, state):
+            return
+
     try:
         payment_service = PaymentService(callback.bot)
         purchase_service = SubscriptionPurchaseService()
