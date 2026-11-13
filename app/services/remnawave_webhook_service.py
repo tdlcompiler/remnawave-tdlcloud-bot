@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.exc import StaleDataError
 
-from app.services.edge_firewall_service import EdgeFirewallService
+from app.services.edge_firewall_service import EdgeFirewallSync, build_edge_firewalls
 from app.config import settings
 from app.database.crud.subscription import (
     deactivate_subscription,
@@ -248,11 +248,10 @@ class RemnaWaveWebhookService:
             **_ADMIN_TORRENT_BLOCKER_EVENTS,
         }
         
-        self._edge_firewall = EdgeFirewallService(
-            host=settings.EDGE_FIREWALL_HOST,
-            port=settings.EDGE_FIREWALL_PORT,
-            token=settings.EDGE_FIREWALL_TOKEN,
-            ca_file=settings.EDGE_FIREWALL_CA_FILE,
+        self._edge_firewall_sync = EdgeFirewallSync(
+            build_edge_firewalls(settings) if settings.EDGE_FIREWALL_ENABLED else [],
+            settings.EDGE_FIREWALL_STATE_FILE,
+            settings.EDGE_FIREWALL_SYNC_SECONDS,
         )
 
     def is_admin_event(self, event_name: str) -> bool:
@@ -360,6 +359,8 @@ class RemnaWaveWebhookService:
         """
         # Check if event has both admin and user handlers (e.g. torrent_blocker.report)
         user_handler = self._user_handlers.get(event_name)
+        if event_name == 'torrent_blocker.report':
+            await self._dispatch_torrent_firewall(data)
         if event_name in self._admin_handlers and user_handler:
             # Dual event: send admin notification AND process user handler
             await self._process_admin_event(event_name, data)
@@ -2045,6 +2046,23 @@ class RemnaWaveWebhookService:
             subscription=subscription,
         )
 
+    async def _dispatch_torrent_firewall(self, data: dict) -> None:
+        if not settings.EDGE_FIREWALL_ENABLED:
+            return
+        report = data.get('report')
+        action = report.get('actionReport') if isinstance(report, dict) else None
+        if not isinstance(action, dict) or action.get('blocked') is not True:
+            return
+        try:
+            ip = str(action['ip'])
+            ttl = int(action['blockDuration'])
+            if ttl <= 0:
+                raise ValueError('non-positive duration')
+        except (KeyError, TypeError, ValueError):
+            logger.warning('Invalid torrent firewall report')
+            return
+        await self._edge_firewall_sync.enqueue(ip, ttl)
+
     async def _handle_torrent_detected(
         self,
         db: AsyncSession,
@@ -2056,60 +2074,6 @@ class RemnaWaveWebhookService:
             'Webhook: torrent detected',
             user_id=user.id,
         )
-
-        report = data.get('report')
-
-        if not isinstance(report, dict):
-            logger.error(
-                'Torrent webhook: report object missing',
-                user_id=user.id,
-            )
-        else:
-            action_report = report.get('actionReport')
-
-            if not isinstance(action_report, dict):
-                logger.error(
-                    'Torrent webhook: actionReport object missing',
-                    user_id=user.id,
-                )
-            else:
-                blocked = action_report.get('blocked')
-                ip = action_report.get('ip')
-                block_duration = action_report.get('blockDuration')
-
-                logger.warning(
-                    'Torrent webhook payload',
-                    user_id=user.id,
-                    blocked=blocked,
-                    ip=ip,
-                    block_duration=block_duration,
-                )
-
-                if blocked is True and ip and block_duration:
-                    if settings.EDGE_FIREWALL_ENABLED:
-                        success = await self._edge_firewall.ban(
-                            ip=str(ip),
-                            ttl=int(block_duration),
-                        )
-
-                        if success:
-                            logger.warning(
-                                'Torrent IP blocked on frontend',
-                                user_id=user.id,
-                                ip=ip,
-                                ttl=block_duration,
-                            )
-                        else:
-                            logger.error(
-                                'Failed to block torrent IP on frontend',
-                                user_id=user.id,
-                                ip=ip,
-                            )
-                    else:
-                        logger.warning(
-                            'Edge firewall integration disabled',
-                            ip=ip,
-                        )
 
         await self._notify_user(
             user,

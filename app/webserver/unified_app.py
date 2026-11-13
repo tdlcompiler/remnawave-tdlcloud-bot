@@ -200,6 +200,9 @@ def create_unified_app(
 
         remnawave_webhook_service = RemnaWaveWebhookService(bot)
         remnawave_router = create_remnawave_webhook_router(bot, remnawave_webhook_service)
+        if settings.EDGE_FIREWALL_ENABLED:
+            startup_handlers.append(remnawave_webhook_service._edge_firewall_sync.start)
+            shutdown_handlers.append(remnawave_webhook_service._edge_firewall_sync.stop)
         app.include_router(remnawave_router)
         app.state.remnawave_webhook_service = remnawave_webhook_service
         logger.info('RemnaWave webhook router mounted', REMNAWAVE_WEBHOOK_PATH=settings.REMNAWAVE_WEBHOOK_PATH)

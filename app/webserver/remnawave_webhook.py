@@ -159,6 +159,8 @@ def create_remnawave_webhook_router(bot: Bot, webhook_service: RemnaWaveWebhookS
                 except Exception:
                     await db.rollback()
                     logger.exception('RemnaWave webhook processing error', event_name=event_name)
+                    if event_name == 'torrent_blocker.report' and settings.EDGE_FIREWALL_ENABLED:
+                        return JSONResponse({'status': 'error', 'reason': 'firewall_queue_failure'}, status_code=503)
                     return JSONResponse({'status': 'ok', 'processed': False})
         except Exception:
             logger.error('RemnaWave webhook: failed to get database session')
