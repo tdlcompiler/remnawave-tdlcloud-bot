@@ -1,6 +1,6 @@
 """Persist renewal responses atomically with balance charges.
 
-Revision ID: 0142
+Revision ID: tdl_renewal_01
 Revises: 0141
 """
 
@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = '0142'
+revision = 'tdl_renewal_01'
 down_revision = '0141'
 branch_labels = None
 depends_on = None

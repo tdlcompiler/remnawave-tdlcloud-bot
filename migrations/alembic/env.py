@@ -45,6 +45,14 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
+    from app.database.migration_0142_transition import transition_legacy_revision
+
+    # Run before Alembic resolves the current revision. Commit independently;
+    # the operation is transactional and idempotent if startup is interrupted.
+    revisions = {script.revision for script in context.script.walk_revisions()}
+    with connection.begin():
+        transition_legacy_revision(connection, '0142' in revisions)
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
