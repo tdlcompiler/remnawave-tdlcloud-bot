@@ -10,8 +10,10 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('users', sa.Column('receipt_email', sa.String(255), nullable=True))
-    op.add_column('guest_purchases', sa.Column('receipt_email', sa.String(255), nullable=True))
+    inspector = sa.inspect(op.get_bind())
+    for table in ('users', 'guest_purchases'):
+        if 'receipt_email' not in {column['name'] for column in inspector.get_columns(table)}:
+            op.add_column(table, sa.Column('receipt_email', sa.String(255), nullable=True))
 
 
 def downgrade():
